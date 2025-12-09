@@ -52,7 +52,9 @@ class SnakeGameAI:
                       Point(self.head.x-(2*BLOCK_SIZE), self.head.y)]
         
         self.score = 0
+        self.total_reward = 0
         self.food = None
+        self.bonus_food = None
         self.obstacles = []
         self._place_obstacles()
         self._place_food()
@@ -71,20 +73,24 @@ class SnakeGameAI:
                 self.obstacles.append(pt)
 
     def _place_food(self):
+        # 1. Place Normal Food (Always)
         x = random.randint(0, (self.w-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE 
         y = random.randint(0, (self.h-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE
         self.food = Point(x, y)
-        
-        # 20% chance for BONUS food (Score 3)
-        if random.random() < 0.2:
-            self.food_type = "BONUS"
-            self.food_color = (255, 255, 0) # Yellow
-        else:
-            self.food_type = "NORMAL"
-            self.food_color = RED
-
-        if self.food in self.snake or self.food in self.obstacles:
+        if self.food in self.snake or self.food in self.obstacles or self.food == self.bonus_food:
             self._place_food()
+            return
+
+        # 2. Try to place Bonus Food (20% chance if not exists)
+        if self.bonus_food is None and random.random() < 0.2:
+            self._place_bonus_food()
+            
+    def _place_bonus_food(self):
+        x = random.randint(0, (self.w-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE 
+        y = random.randint(0, (self.h-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE
+        self.bonus_food = Point(x, y)
+        if self.bonus_food in self.snake or self.bonus_food in self.obstacles or self.bonus_food == self.food:
+            self._place_bonus_food()
         
     def play_step(self, action):
         self.frame_iteration += 1
@@ -95,6 +101,7 @@ class SnakeGameAI:
                 quit()
             
         # 2. move
+        dist_before = abs(self.head.x - self.food.x) + abs(self.head.y - self.food.y)
         self._move(action) # update the head
         self.snake.insert(0, self.head)
         
@@ -106,41 +113,28 @@ class SnakeGameAI:
             reward = -10
             return reward, game_over, self.score
             
-        # 4. place new food or just move
+        # 4. Check for Eating Data
+        # Normal Food
         if self.head == self.food:
-            if self.food_type == "BONUS":
-                self.score += 3
-                reward = 30
-            else:
-                self.score += 1
-                reward = 10
+            self.score += 1
+            reward = 10
             self._place_food()
+        # Bonus Food
+        elif self.bonus_food is not None and self.head == self.bonus_food:
+            self.score += 3
+            reward = 30
+            self.bonus_food = None
         else:
-            # Calculate distance using Manhattan distance (grid based)
-            head_old = self.snake[0]
-            # We need the previous head... wait, self.head is already updated in _move.
-            # So we need to compare current self.head to food, vs previous head to food.
-            # Typically snake.pop() happens for the tail.
-            
-            # Let's calculate distance AFTER move
-            dist_current = abs(self.head.x - self.food.x) + abs(self.head.y - self.food.y)
-            
-            # Use 'frame_iteration' or store 'prev_distance' to compare? 
-            # Easier: Re-calculate 'prev_distance' using the point before _move.
-            # But we don't have it easily unless we stored it.
-            
-            # Let's check `_move`. We can get "virtual previous head" by reversing the move? 
-            # Or just store `self.prev_distance` in the class.
-            pass
-
-        # ... simpler approach: 
-        # In step 1 (before move), store dist. 
-        # In step 2 (after move), compare.
-        
-        # See below implementation
-
             self.snake.pop()
-            reward = -0.1 # Penalty for each step to encourage speed
+            
+            # Proximity Reward (Targeting Normal Food)
+            dist_after = abs(self.head.x - self.food.x) + abs(self.head.y - self.food.y)
+            if dist_after < dist_before:
+                reward = 0.1 # Closer
+            else:
+                reward = -0.2 # Further/Same (includes step penalty)
+            
+        self.total_reward += reward
         
         # 5. update ui and clock
         self._update_ui()
@@ -170,7 +164,12 @@ class SnakeGameAI:
             pygame.draw.rect(self.display, BLUE1, pygame.Rect(pt.x, pt.y, BLOCK_SIZE, BLOCK_SIZE))
             pygame.draw.rect(self.display, BLUE2, pygame.Rect(pt.x+4, pt.y+4, 12, 12))
             
-        pygame.draw.rect(self.display, self.food_color, pygame.Rect(self.food.x, self.food.y, BLOCK_SIZE, BLOCK_SIZE))
+        # Draw Normal Food (Red)
+        pygame.draw.rect(self.display, RED, pygame.Rect(self.food.x, self.food.y, BLOCK_SIZE, BLOCK_SIZE))
+        
+        # Draw Bonus Food (Yellow)
+        if self.bonus_food is not None:
+             pygame.draw.rect(self.display, (255, 255, 0), pygame.Rect(self.bonus_food.x, self.bonus_food.y, BLOCK_SIZE, BLOCK_SIZE))
         
         for pt in self.obstacles:
             pygame.draw.rect(self.display, (128, 128, 128), pygame.Rect(pt.x, pt.y, BLOCK_SIZE, BLOCK_SIZE))

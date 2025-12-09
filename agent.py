@@ -38,6 +38,15 @@ class Agent:
         dir_u = game.direction == Direction.UP
         dir_d = game.direction == Direction.DOWN
 
+        # Determine target food (Normal or Bonus)
+        food_target = game.food
+        if game.bonus_food is not None:
+            dist_normal = abs(head.x - game.food.x) + abs(head.y - game.food.y)
+            dist_bonus = abs(head.x - game.bonus_food.x) + abs(head.y - game.bonus_food.y)
+            # Simple heuristic: if bonus is present, target the closer one
+            if dist_bonus < dist_normal:
+                food_target = game.bonus_food
+
         state = [
             # Danger straight
             (dir_r and game.is_collision(point_r)) or 
@@ -63,11 +72,11 @@ class Agent:
             dir_u,
             dir_d,
             
-            # Food location 
-            game.food.x < game.head.x,  # food left
-            game.food.x > game.head.x,  # food right
-            game.food.y < game.head.y,  # food up
-            game.food.y > game.head.y  # food down
+            # Food location (Target)
+            food_target.x < game.head.x,  # food left
+            food_target.x > game.head.x,  # food right
+            food_target.y < game.head.y,  # food up
+            food_target.y > game.head.y  # food down
             ]
 
         return np.array(state, dtype=int)
