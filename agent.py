@@ -53,8 +53,9 @@ class Agent:
         
         # New State Size:
         # 8 Rays (Collision Dist) + 4 Direction (One Hot) + 2 Food Vector + 1 Length = 15 inputs
-        self.model = DuelingLinearQNet(15, 256, 3)
-        self.target_model = DuelingLinearQNet(15, 256, 3)
+        # Using GroupNorm for better feature grouping (recommended for RL)
+        self.model = DuelingLinearQNet(15, 256, 3, norm_type='group')
+        self.target_model = DuelingLinearQNet(15, 256, 3, norm_type='group')
         self.target_model.load_state_dict(self.model.state_dict())
         self.target_model.eval()
         
@@ -209,12 +210,12 @@ class Agent:
         self.loop_monitor.update(game.head, game.score)
         
         # random moves: tradeoff exploration / exploitation
-        # CRITICAL FIX: MUCH faster epsilon decay
-        # At game 50, epsilon ~ 15. At game 100, epsilon ~ 3. At game 200, epsilon ~ 0.1
-        self.epsilon = 80 * np.exp(-0.02 * self.n_games)
+        # Epsilon decay: slower decay for better exploration
+        # At game 100: ε ≈ 0.48, game 200: ε ≈ 0.29, game 400: ε ≈ 0.11, game 600+: ε ≈ 0.05
+        self.epsilon = max(0.05, 0.8 * np.exp(-0.005 * self.n_games))
         
         final_move = [0,0,0]
-        if random.randint(0, 200) < self.epsilon:
+        if random.random() < self.epsilon:
             move = random.randint(0, 2)
             final_move[move] = 1
         else:

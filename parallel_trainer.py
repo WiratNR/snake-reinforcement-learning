@@ -285,7 +285,7 @@ class ParallelTrainer:
                     
                     # Print stats more frequently with epsilon
                     # Calculate epsilon for display (same formula as agent)
-                    epsilon = 80 * np.exp(-0.02 * self.agent.n_games)
+                    epsilon = max(0.05, 0.8 * np.exp(-0.005 * self.agent.n_games))
                     print(f'Game {self.agent.n_games} | Worker {stat["worker_id"]} | '
                           f'Score {score} | Mean {mean_score:.2f} | '
                           f'Best Mean {self.best_mean_score:.2f} | '
