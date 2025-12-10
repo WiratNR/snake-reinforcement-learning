@@ -20,9 +20,14 @@ class Agent:
         self.gamma = 0.9 # discount rate
         self.memory = deque(maxlen=MAX_MEMORY) # popleft()
         self.model = Linear_QNet(11, 256, 3)
+        self.target_model = Linear_QNet(11, 256, 3)
+        self.target_model.load_state_dict(self.model.state_dict())
+        self.target_model.eval() # Target net not trained directly
+        
         self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
         # Load existing model
         if self.model.load():
+            self.target_model.load_state_dict(self.model.state_dict())
             print("Loaded existing model configuration.")
 
 
@@ -91,14 +96,19 @@ class Agent:
             mini_sample = self.memory
 
         states, actions, rewards, next_states, dones = zip(*mini_sample)
-        self.trainer.train_step(states, actions, rewards, next_states, dones)
-        # for state, action, reward, next_state, done in mini_sample:
-        #    self.trainer.train_step(state, action, reward, next_state, done)
+        self.trainer.train_step(states, actions, rewards, next_states, dones, self.target_model)
+        
+        # Update target network weights (Hard update every game/step)
+        # Since this is called once per game, hard update is acceptable or pollyak
+        # For Double DQN stability, often update every K steps. 
+        # Here we do it every game for simplicity, or we can use soft update.
+        # Let's do simple hard update for now to match structure.
+        self.target_model.load_state_dict(self.model.state_dict())
 
     def train_short_memory(self, state, action, reward, next_state, done):
-        return self.trainer.train_step(state, action, reward, next_state, done)
+        return self.trainer.train_step(state, action, reward, next_state, done, self.target_model)
 
-    def get_action(self, state):
+    def get_action(self, state, game):
         # random moves: tradeoff exploration / exploitation
         self.epsilon = 80 - self.n_games
         final_move = [0,0,0]
@@ -111,6 +121,57 @@ class Agent:
             move = torch.argmax(prediction).item()
             final_move[move] = 1
 
+        # --- Safety Heuristic (Lookahead) ---
+        # Prevent "dumb" deaths from hitting walls/self if a safe move exists
+        # This overrides both random and model-predicted moves if they are fatal
+        
+        # 1. Simulate the move
+        # We need to know what "move 0, 1, 2" means for current direction
+        # [straight, right, left]
+        
+        # Map move index to direction change
+        clock_wise = [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
+        idx = clock_wise.index(game.direction)
+        
+        proposed_move_idx = final_move.index(1)
+        next_dirs = [
+            clock_wise[idx], # Straight
+            clock_wise[(idx + 1) % 4], # Right
+            clock_wise[(idx - 1) % 4]  # Left
+        ]
+        
+        proposed_dir = next_dirs[proposed_move_idx]
+        
+        # Check if proposed dir causes collision
+        # Calculate next head position
+        x = game.head.x
+        y = game.head.y
+        if proposed_dir == Direction.RIGHT: x += 20
+        elif proposed_dir == Direction.LEFT: x -= 20
+        elif proposed_dir == Direction.DOWN: y += 20
+        elif proposed_dir == Direction.UP: y -= 20
+        
+        point_check = Point(x, y)
+        if game.is_collision(point_check):
+            # Proposed move dies. Try to find a safe one.
+            safe_move_found = False
+            for i in range(3):
+                if i == proposed_move_idx: continue # Skip the deadly one
+                
+                check_dir = next_dirs[i]
+                cx, cy = game.head.x, game.head.y
+                if check_dir == Direction.RIGHT: cx += 20
+                elif check_dir == Direction.LEFT: cx -= 20
+                elif check_dir == Direction.DOWN: cy += 20
+                elif check_dir == Direction.UP: cy -= 20
+                
+                if not game.is_collision(Point(cx, cy)):
+                    # Found safe move
+                    final_move = [0, 0, 0]
+                    final_move[i] = 1
+                    safe_move_found = True
+                    break
+        
         return final_move
 
 
@@ -122,7 +183,8 @@ def train():
     scores_window = deque(maxlen=50) 
     
     agent = Agent()
-    game = SnakeGameAI()
+    # Headless training (render=False) for speed
+    game = SnakeGameAI(render=False)
 
     # Load training state (n_games, best_mean_score)
     best_mean_score = 0
@@ -133,14 +195,12 @@ def train():
             best_mean_score = state_data.get('best_mean_score', 0)
             print(f"Resumed training from Game {agent.n_games}, Best Mean: {best_mean_score}")
     
-    # If model exists but no state file (legacy), we rely on model weights but n_games is 0 (high exploration)
-    # Ideally should sync, but for now this handles the restart case.
     while True:
         # get old state
         state_old = agent.get_state(game)
 
         # get move
-        final_move = agent.get_action(state_old)
+        final_move = agent.get_action(state_old, game)
 
         # perform move and get new state
         reward, done, score = game.play_step(final_move)
@@ -180,14 +240,32 @@ def train():
             print('Game', agent.n_games, 'Score', score, 'Mean', mean_score, 'Best Mean', best_mean_score, 'Loss', loss, 'Saved' if saved else '')
 
             plot_scores.append(score)
-            # Plotting the cumulative mean for the graph still, or could switch to rolling
             total_score += score
             cumulative_mean = total_score / agent.n_games
             plot_mean_scores.append(cumulative_mean)
-            # plot(plot_scores, plot_mean_scores) # Updated helper to plot loss is needed
-            # For now passing None for loss until helper is updated
             plot(plot_scores, plot_mean_scores, loss)
 
+def test():
+    """Runs the game with UI using the current best model (Greedy/Low Epsilon)"""
+    agent = Agent()
+    game = SnakeGameAI(render=True)
+    
+    # Force low epsilon for testing (mostly exploitation)
+    agent.n_games = 1000 
+    
+    while True:
+        state_old = agent.get_state(game)
+        final_move = agent.get_action(state_old, game)
+        reward, done, score = game.play_step(final_move)
+        
+        if done:
+            game.reset()
+            print('Game Over. Score:', score)
 
 if __name__ == '__main__':
-    train()
+    # Default to train, but allows simple toggle or CLI later
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == 'test':
+        test()
+    else:
+        train()

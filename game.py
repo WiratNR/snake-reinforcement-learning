@@ -33,13 +33,15 @@ SPEED = 40
 
 class SnakeGameAI:
     
-    def __init__(self, w=640, h=480):
+    def __init__(self, w=640, h=480, render=True):
         self.w = w
         self.h = h
+        self.render = render
         # init display
-        self.display = pygame.display.set_mode((self.w, self.h))
-        pygame.display.set_caption('Snake')
-        self.clock = pygame.time.Clock()
+        if self.render:
+            self.display = pygame.display.set_mode((self.w, self.h))
+            pygame.display.set_caption('Snake')
+            self.clock = pygame.time.Clock()
         self.reset()
         
     def reset(self):
@@ -100,45 +102,81 @@ class SnakeGameAI:
                 pygame.quit()
                 quit()
             
+    def _get_closest_food_dist(self):
+        dist_normal = abs(self.head.x - self.food.x) + abs(self.head.y - self.food.y)
+        if self.bonus_food:
+            dist_bonus = abs(self.head.x - self.bonus_food.x) + abs(self.head.y - self.bonus_food.y)
+            return min(dist_normal, dist_bonus)
+        return dist_normal
+
+    def play_step(self, action):
+        self.frame_iteration += 1
+        # 1. collect user input
+        if self.render:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    quit()
+            
         # 2. move
-        dist_before = abs(self.head.x - self.food.x) + abs(self.head.y - self.food.y)
+        # Track distance to CLOSEST food (Normal or Bonus)
+        dist_before = self._get_closest_food_dist()
+        
         self._move(action) # update the head
         self.snake.insert(0, self.head)
         
+        # Base Time Penalty (C)
+        reward = -0.01
+        
         # 3. check if game over
-        reward = 0
         game_over = False
-        if self.is_collision() or self.frame_iteration > 100*len(self.snake):
+        # Increased frame limit to 150 to allow for detours around obstacles
+        if self.is_collision() or self.frame_iteration > 150*len(self.snake):
             game_over = True
-            reward = -10
+            reward = -1 # Basic Die (A)
             return reward, game_over, self.score
             
         # 4. Check for Eating Data
         # Normal Food
         if self.head == self.food:
             self.score += 1
-            reward = 10
+            reward = 1 # Basic Eat Food (A)
             self._place_food()
         # Bonus Food
         elif self.bonus_food is not None and self.head == self.bonus_food:
             self.score += 3
-            reward = 30
+            reward = 3 # Scaled Bonus
             self.bonus_food = None
         else:
             self.snake.pop()
             
-            # Proximity Reward (Targeting Normal Food)
-            dist_after = abs(self.head.x - self.food.x) + abs(self.head.y - self.food.y)
+            # Distance-based shaping (B)
+            dist_after = self._get_closest_food_dist()
+            
             if dist_after < dist_before:
-                reward = 0.1 # Closer
+                reward += 0.1 # Closer
             else:
-                reward = -0.2 # Further/Same (includes step penalty)
+                reward += -0.05 # Further
+                
+            # Area / Free-space rewards (D)
+            # Simple heuristic: Reward if head has > 2 empty neighbors (not walls/body/obstacles)
+            # This encourages staying in open space
+            safe_neighbors = 0
+            check_dirs = [Point(0, 20), Point(0, -20), Point(20, 0), Point(-20, 0)]
+            for d in check_dirs:
+                neighbor = Point(self.head.x + d.x, self.head.y + d.y)
+                if not self.is_collision(neighbor):
+                    safe_neighbors += 1
+            
+            if safe_neighbors >= 3:
+                reward += 0.005 # Small reward for being in open space
             
         self.total_reward += reward
         
         # 5. update ui and clock
-        self._update_ui()
-        self.clock.tick(SPEED)
+        if self.render:
+            self._update_ui()
+            self.clock.tick(SPEED)
         # 6. return game over and score
         return reward, game_over, self.score
     
