@@ -9,19 +9,29 @@ class DuelingLinearQNet(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super().__init__()
         self.linear1 = nn.Linear(input_size, hidden_size)
+        self.ln1 = nn.LayerNorm(hidden_size)  # LayerNorm works with batch_size=1
+        self.dropout1 = nn.Dropout(0.2)  # Dropout to prevent overfitting
         
-        # Value stream
+        # Value stream (deeper with normalization)
         self.value_stream = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size),  # LayerNorm instead of BatchNorm
             nn.ReLU(),
-            nn.Linear(hidden_size, 1)
+            nn.Dropout(0.2),
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_size // 2, 1)
         )
         
-        # Advantage stream
+        # Advantage stream (deeper with normalization)
         self.advantage_stream = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size),  # LayerNorm instead of BatchNorm
             nn.ReLU(),
-            nn.Linear(hidden_size, output_size)
+            nn.Dropout(0.2),
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_size // 2, output_size)
         )
 
     def forward(self, x):
@@ -32,7 +42,10 @@ class DuelingLinearQNet(nn.Module):
         else:
             squeeze_output = False
             
-        x = F.relu(self.linear1(x))
+        x = self.linear1(x)
+        x = self.ln1(x)
+        x = F.relu(x)
+        x = self.dropout1(x)
         
         value = self.value_stream(x)
         advantage = self.advantage_stream(x)
@@ -82,7 +95,8 @@ class QTrainer:
         self.gamma = gamma
         self.model = model
         self.optimizer = optim.Adam(model.parameters(), lr=self.lr)
-        self.criterion = nn.MSELoss()
+        # Huber Loss: More robust than MSE, less sensitive to outliers
+        self.criterion = nn.SmoothL1Loss()  # Huber Loss
 
     def train_step(self, state, action, reward, next_state, done, target_model=None):
         state = torch.tensor(np.array(state), dtype=torch.float)
@@ -124,8 +138,12 @@ class QTrainer:
             target[idx][torch.argmax(action[idx]).item()] = Q_new
     
         self.optimizer.zero_grad()
-        loss = self.criterion(target, pred)
+        loss = self.criterion(pred, target)
         loss.backward()
+        
+        # Gradient Clipping: Prevent exploding gradients
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
         self.optimizer.step()
         return loss.item()
+
