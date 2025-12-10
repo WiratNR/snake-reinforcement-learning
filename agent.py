@@ -196,7 +196,7 @@ class Agent:
         return final_move
 
 
-def train():
+def train(target_level=None):
     plot_scores = []
     plot_mean_scores = []
     total_score = 0
@@ -212,6 +212,14 @@ def train():
     current_level_idx = 0
     stagnation_counter = 0
     stagnation_limit = 50 # If no improvement for 50 games, switch level
+    
+    # Override if target_level is set
+    if target_level:
+        if target_level not in possible_levels:
+            print(f"Error: Level '{target_level}' not found. Available: {possible_levels}")
+            return
+        current_level_idx = possible_levels.index(target_level)
+        print(f"Forcing Training on Level: {target_level}")
 
     # Load training state (n_games, best_mean_score, curriculum)
     best_mean_score = 0
@@ -275,12 +283,15 @@ def train():
                     json.dump(state_data, f)
                 
                 saved = True
-                stagnation_counter = 0 # Reset counter on improvement
+            print('Game', agent.n_games, 'Score', score, 'Mean', mean_score, 'Best Mean', best_mean_score, 'Loss', loss, 'Saved' if saved else '')
+
+            if saved:
+                 stagnation_counter = 0 # Reset counter on improvement
             else:
-                stagnation_counter += 1
+                 stagnation_counter += 1
                 
-            # Curriculum Switch
-            if stagnation_counter >= stagnation_limit:
+            # Curriculum Switch (Only if no target level is forced)
+            if not target_level and stagnation_counter >= stagnation_limit:
                  print(f"Stagnation detected ({stagnation_limit} games without new best mean). Switching Level.")
                  current_level_idx = (current_level_idx + 1) % len(possible_levels)
                  next_level = possible_levels[current_level_idx]
@@ -288,19 +299,21 @@ def train():
                  print(f"New Level: {next_level}")
                  stagnation_counter = 0
 
-            print('Game', agent.n_games, 'Score', score, 'Mean', mean_score, 'Best Mean', best_mean_score, 'Loss', loss, 'Saved' if saved else '')
-
             plot_scores.append(score)
             total_score += score
             cumulative_mean = total_score / agent.n_games
             plot_mean_scores.append(cumulative_mean)
             plot(plot_scores, plot_mean_scores, loss)
 
-def test():
+def test(target_level=None):
     """Runs the game with UI using the current best model (Greedy/Low Epsilon)"""
     agent = Agent()
     game = SnakeGameAI(render=True)
     
+    if target_level:
+        game.set_level(target_level)
+        print(f"Testing on Level: {target_level}")
+
     # Force low epsilon for testing (mostly exploitation)
     agent.n_games = 1000 
     
@@ -336,8 +349,13 @@ if __name__ == '__main__':
     # Default to train, but allows simple toggle or CLI later
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == 'test':
-        test()
+        if len(sys.argv) > 2:
+             test(target_level=sys.argv[2])
+        else:
+             test()
     elif len(sys.argv) > 1 and sys.argv[1] == 'test_level':
         test_levels()
+    elif len(sys.argv) > 2 and sys.argv[1] == 'train':
+        train(target_level=sys.argv[2])
     else:
         train()

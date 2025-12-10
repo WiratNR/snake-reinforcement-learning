@@ -150,6 +150,10 @@ class SnakeGameAI:
             self.bonus_timer -= 1
             if self.bonus_timer <= 0:
                 self.bonus_food = None
+                if self.score > 100:
+                    reward -= 5
+                else:
+                    reward -= 10
                 
         # 4. Check for Eating Data
         # Normal Food
