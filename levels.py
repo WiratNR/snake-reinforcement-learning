@@ -6,17 +6,22 @@ BLOCK_SIZE = 20
 
 class LevelManager:
     
+    LEVELS = ['random', 'box', 'cross', 'border', 'empty']
+
+    @staticmethod
+    def get_level(name, w, h):
+        if name == 'random': return LevelManager.random_obstacles(w, h)
+        if name == 'box': return LevelManager.box_obstacles(w, h)
+        if name == 'cross': return LevelManager.cross_obstacles(w, h)
+        if name == 'border': return LevelManager.border_obstacles(w, h)
+        if name == 'empty': return []
+        return [] # Default empty
+
     @staticmethod
     def get_random_level(w, h):
         """Randomly selects a level pattern"""
-        patterns = [
-            LevelManager.random_obstacles,
-            LevelManager.box_obstacles,
-            LevelManager.cross_obstacles,
-            LevelManager.border_obstacles
-        ]
-        chosen_pattern = random.choice(patterns)
-        return chosen_pattern(w, h)
+        name = random.choice(LevelManager.LEVELS)
+        return LevelManager.get_level(name, w, h)
 
     @staticmethod
     def random_obstacles(w, h):

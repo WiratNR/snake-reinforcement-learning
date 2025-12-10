@@ -43,6 +43,12 @@ class SnakeGameAI:
             self.display = pygame.display.set_mode((self.w, self.h))
             pygame.display.set_caption('Snake')
             self.clock = pygame.time.Clock()
+            self.clock = pygame.time.Clock()
+        self.current_level = 'random'
+        self.reset()
+        
+    def set_level(self, level_name):
+        self.current_level = level_name
         self.reset()
         
     def reset(self):
@@ -64,10 +70,9 @@ class SnakeGameAI:
         self.frame_iteration = 0
         
     def _place_obstacles(self):
-        # Use external LevelManager to get a random level
-        # IMPORTANT: 'Point' in levels.py might be distinct from 'Point' here if not handled carefully
-        # But namedtokens are compatible if fields match.
-        raw_obstacles = LevelManager.get_random_level(self.w, self.h)
+        # Use external LevelManager
+        raw_obstacles = LevelManager.get_level(self.current_level, self.w, self.h)
+        self.obstacles = []
         self.obstacles = []
         # Convert to local Point just in case, though they are likely compatible
         for p in raw_obstacles:
@@ -141,7 +146,7 @@ class SnakeGameAI:
         # Normal Food
         if self.head == self.food:
             self.score += 1
-            reward = 1 # Basic Eat Food (A)
+            reward = 10 # Basic Eat Food (A)
             self._place_food()
         # Bonus Food
         elif self.bonus_food is not None and self.head == self.bonus_food:
@@ -155,9 +160,9 @@ class SnakeGameAI:
             dist_after = self._get_closest_food_dist()
             
             if dist_after < dist_before:
-                reward += 0.1 # Closer
+                reward += 0.5 # Closer
             else:
-                reward += -0.05 # Further
+                reward += -0.25 # Further
                 
             # Area / Free-space rewards (D)
             # Simple heuristic: Reward if head has > 2 empty neighbors (not walls/body/obstacles)

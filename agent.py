@@ -5,6 +5,7 @@ from collections import deque
 import os
 import json
 from game import SnakeGameAI, Direction, Point
+from levels import LevelManager
 from model import Linear_QNet, QTrainer
 from helper import plot
 
@@ -98,12 +99,9 @@ class Agent:
         states, actions, rewards, next_states, dones = zip(*mini_sample)
         self.trainer.train_step(states, actions, rewards, next_states, dones, self.target_model)
         
-        # Update target network weights (Hard update every game/step)
-        # Since this is called once per game, hard update is acceptable or pollyak
-        # For Double DQN stability, often update every K steps. 
-        # Here we do it every game for simplicity, or we can use soft update.
-        # Let's do simple hard update for now to match structure.
-        self.target_model.load_state_dict(self.model.state_dict())
+        # Update target network weights (Soft/Delayed update)
+        if self.n_games % 10 == 0:
+            self.target_model.load_state_dict(self.model.state_dict())
 
     def train_short_memory(self, state, action, reward, next_state, done):
         return self.trainer.train_step(state, action, reward, next_state, done, self.target_model)
@@ -137,7 +135,10 @@ class Agent:
 
     def get_action(self, state, game):
         # random moves: tradeoff exploration / exploitation
-        self.epsilon = 80 - self.n_games
+        # Epsilon Decay: Exponential decay to ensure long-term exploration
+        # At game 1000, epsilon ~ 29. At game 2000, epsilon ~ 10.
+        self.epsilon = 80 * np.exp(-0.001 * self.n_games)
+        
         final_move = [0,0,0]
         if random.randint(0, 200) < self.epsilon:
             move = random.randint(0, 2)
@@ -214,6 +215,16 @@ def train():
             agent.n_games = state_data.get('n_games', 0)
             best_mean_score = state_data.get('best_mean_score', 0)
             print(f"Resumed training from Game {agent.n_games}, Best Mean: {best_mean_score}")
+            
+    # Curriculum Learning State
+    possible_levels = LevelManager.LEVELS
+    current_level_idx = 0
+    stagnation_counter = 0
+    stagnation_limit = 50 # If no improvement for 50 games, switch level
+    
+    # Set initial level
+    game.set_level(possible_levels[current_level_idx])
+    print(f"Starting Level: {possible_levels[current_level_idx]}")
     
     while True:
         # get old state
@@ -251,11 +262,23 @@ def train():
                 state_data = {
                     'n_games': agent.n_games,
                     'best_mean_score': best_mean_score
-                }
+            }
                 with open('model/training_state.json', 'w') as f:
                     json.dump(state_data, f)
                 
                 saved = True
+                stagnation_counter = 0 # Reset counter on improvement
+            else:
+                stagnation_counter += 1
+                
+            # Curriculum Switch
+            if stagnation_counter >= stagnation_limit:
+                 print(f"Stagnation detected ({stagnation_limit} games without new best mean). Switching Level.")
+                 current_level_idx = (current_level_idx + 1) % len(possible_levels)
+                 next_level = possible_levels[current_level_idx]
+                 game.set_level(next_level)
+                 print(f"New Level: {next_level}")
+                 stagnation_counter = 0
 
             print('Game', agent.n_games, 'Score', score, 'Mean', mean_score, 'Best Mean', best_mean_score, 'Loss', loss, 'Saved' if saved else '')
 
