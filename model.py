@@ -5,17 +5,46 @@ import torch.nn.functional as F
 import os
 import numpy as np
 
-class DuelingLinearQNet(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
+class GroupNormWrapper(nn.Module):
+    """Wrapper for GroupNorm to handle 2D inputs (batch_size, features)"""
+    def __init__(self, num_groups, num_channels):
         super().__init__()
+        self.gn = nn.GroupNorm(num_groups, num_channels)
+    
+    def forward(self, x):
+        # x shape: (batch, features)
+        # GroupNorm expects: (batch, channels, *)
+        # Add dummy dimension: (batch, features, 1)
+        x = x.unsqueeze(-1)
+        x = self.gn(x)
+        # Remove dummy dimension
+        x = x.squeeze(-1)
+        return x
+
+
+class DuelingLinearQNet(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, norm_type='layer'):
+        """
+        Dueling DQN with configurable normalization
+        
+        Args:
+            input_size: Number of input features
+            hidden_size: Size of hidden layers
+            output_size: Number of actions
+            norm_type: Type of normalization ('layer', 'group', 'none')
+        """
+        super().__init__()
+        self.norm_type = norm_type
         self.linear1 = nn.Linear(input_size, hidden_size)
-        self.ln1 = nn.LayerNorm(hidden_size)  # LayerNorm works with batch_size=1
+        
+        # Choose normalization layer
+        self.norm1 = self._get_norm_layer(hidden_size)
         self.dropout1 = nn.Dropout(0.2)  # Dropout to prevent overfitting
         
         # Value stream (deeper with normalization)
         self.value_stream = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
-            nn.LayerNorm(hidden_size),  # LayerNorm instead of BatchNorm
+            self._get_norm_layer(hidden_size),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(hidden_size, hidden_size // 2),
@@ -26,13 +55,30 @@ class DuelingLinearQNet(nn.Module):
         # Advantage stream (deeper with normalization)
         self.advantage_stream = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
-            nn.LayerNorm(hidden_size),  # LayerNorm instead of BatchNorm
+            self._get_norm_layer(hidden_size),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
             nn.Linear(hidden_size // 2, output_size)
         )
+    
+    
+    def _get_norm_layer(self, num_features):
+        """Create normalization layer based on norm_type"""
+        if self.norm_type == 'layer':
+            return nn.LayerNorm(num_features)
+        elif self.norm_type == 'group':
+            # GroupNorm: divide features into groups (typically 8 or 16)
+            num_groups = min(8, num_features)  # Ensure num_groups divides num_features
+            while num_features % num_groups != 0:
+                num_groups -= 1
+            # Wrap GroupNorm to handle 2D inputs
+            return GroupNormWrapper(num_groups, num_features)
+        elif self.norm_type == 'none':
+            return nn.Identity()  # No normalization
+        else:
+            raise ValueError(f"Unknown norm_type: {self.norm_type}. Use 'layer', 'group', or 'none'.")
 
     def forward(self, x):
         # Handle both 1D and 2D inputs
@@ -43,7 +89,7 @@ class DuelingLinearQNet(nn.Module):
             squeeze_output = False
             
         x = self.linear1(x)
-        x = self.ln1(x)
+        x = self.norm1(x)
         x = F.relu(x)
         x = self.dropout1(x)
         
