@@ -6,12 +6,41 @@ import os
 import json
 from game import SnakeGameAI, Direction, Point
 from levels import LevelManager
-from model import Linear_QNet, QTrainer
+from model import DuelingLinearQNet, QTrainer
 from helper import plot
 
 MAX_MEMORY = 100_000
 BATCH_SIZE = 1000
 LR = 0.001
+
+class LoopMonitor:
+    def __init__(self, history_len=100, threshold=4):
+        self.history = deque(maxlen=history_len)
+        self.threshold = threshold
+        
+    def update(self, head, score):
+        # Store state as (x, y, score)
+        self.history.append((head.x, head.y, score))
+        
+    def is_stuck(self):
+        if len(self.history) < self.history.maxlen:
+            return False
+            
+        current_step = self.history[-1]
+        current_pos = (current_step[0], current_step[1])
+        current_score = current_step[2]
+        
+        # Count how many times we've been at this exact position with this exact score
+        # in the recent history.
+        count = 0
+        for x, y, s in self.history:
+            if x == current_pos[0] and y == current_pos[1] and s == current_score:
+                count += 1
+                
+        return count >= self.threshold
+    
+    def clear(self):
+        self.history.clear()
 
 class Agent:
 
@@ -20,10 +49,14 @@ class Agent:
         self.epsilon = 0 # randomness
         self.gamma = 0.9 # discount rate
         self.memory = deque(maxlen=MAX_MEMORY) # popleft()
-        self.model = Linear_QNet(11, 256, 3)
-        self.target_model = Linear_QNet(11, 256, 3)
+        self.loop_monitor = LoopMonitor()
+        
+        # New State Size:
+        # 8 Rays (Collision Dist) + 4 Direction (One Hot) + 2 Food Vector + 1 Length = 15 inputs
+        self.model = DuelingLinearQNet(15, 256, 3)
+        self.target_model = DuelingLinearQNet(15, 256, 3)
         self.target_model.load_state_dict(self.model.state_dict())
-        self.target_model.eval() # Target net not trained directly
+        self.target_model.eval()
         
         self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
         # Load existing model
@@ -34,58 +67,98 @@ class Agent:
 
     def get_state(self, game):
         head = game.snake[0]
-        point_l = Point(head.x - 20, head.y)
-        point_r = Point(head.x + 20, head.y)
-        point_u = Point(head.x, head.y - 20)
-        point_d = Point(head.x, head.y + 20)
         
+        # 1. Directions (One Hot)
         dir_l = game.direction == Direction.LEFT
         dir_r = game.direction == Direction.RIGHT
         dir_u = game.direction == Direction.UP
         dir_d = game.direction == Direction.DOWN
-
-        # Determine target food (Normal or Bonus)
-        food_target = game.food
-        if game.bonus_food is not None:
-            dist_normal = abs(head.x - game.food.x) + abs(head.y - game.food.y)
-            dist_bonus = abs(head.x - game.bonus_food.x) + abs(head.y - game.bonus_food.y)
-            # Simple heuristic: if bonus is present, target the closer one
-            if dist_bonus < dist_normal:
-                food_target = game.bonus_food
+        
+        # 2. Food Vector (Relative to Head, Normalized)
+        # Using game.food (or bonus if closer)
+        target = game.food
+        if game.bonus_food:
+             # Heuristic: Target closest
+             d_normal = abs(head.x - game.food.x) + abs(head.y - game.food.y)
+             d_bonus = abs(head.x - game.bonus_food.x) + abs(head.y - game.bonus_food.y)
+             if d_bonus < d_normal:
+                 target = game.bonus_food
+        
+        food_dx = (target.x - head.x) / game.w
+        food_dy = (target.y - head.y) / game.h
+        
+        # 3. Snake Length (Normalized)
+        # Max possible length is w*h / block_size^2 approx. Just normalize by 100 for substantial contribution?
+        # Or normalize by total grid cells.
+        grid_cells = (game.w // 20) * (game.h // 20)
+        norm_length = len(game.snake) / grid_cells
+        
+        # 4. Ray-Casting (8 Directions)
+        # Directions: N, NE, E, SE, S, SW, W, NW
+        # Check distance to WALL or BODY
+        # Return 1 - distance/max_dist (so 1 is Close/Collision, 0 is Far)
+        
+        ray_dirs = [
+            Point(0, -20),   # N
+            Point(20, -20),  # NE
+            Point(20, 0),    # E
+            Point(20, 20),   # SE
+            Point(0, 20),    # S
+            Point(-20, 20),  # SW
+            Point(-20, 0),   # W
+            Point(-20, -20)  # NW
+        ]
+        
+        ray_vals = []
+        max_dist = (game.w**2 + game.h**2)**0.5 # Diagonal
+        
+        for d in ray_dirs:
+            dist = 0
+            current_x, current_y = head.x, head.y
+            found_obstacle = False
+            
+            # Cast ray
+            while True:
+                current_x += d.x
+                current_y += d.y
+                dist += 1
+                
+                # Check bounds (Wall) -> Collision
+                if current_x < 0 or current_x >= game.w or current_y < 0 or current_y >= game.h:
+                    found_obstacle = True
+                    break
+                    
+                # Check body -> Collision
+                # Checking entire body is O(N) per step of ray. 
+                # Optimization: create a set of body points?
+                # For now, just linear check is fine for standard snake size.
+                if Point(current_x, current_y) in game.snake:
+                    found_obstacle = True
+                    break
+            
+            # Normalize Distance
+            # Distance is in "steps" (blocks). 
+            # 1 step = immediate collision. 
+            # We want value 1.0 if dist is 1. Value 0.0 if dist is large.
+            # Let's normalize by max_steps ~ 50.
+            # Or use 1/dist
+            
+            if dist == 0: val = 1.0 # Should not happen unless head is in wall
+            else: val = 1.0 / dist
+            
+            ray_vals.append(val)
 
         state = [
-            # Danger straight
-            (dir_r and game.is_collision(point_r)) or 
-            (dir_l and game.is_collision(point_l)) or 
-            (dir_u and game.is_collision(point_u)) or 
-            (dir_d and game.is_collision(point_d)),
-
-            # Danger right
-            (dir_u and game.is_collision(point_r)) or 
-            (dir_d and game.is_collision(point_l)) or 
-            (dir_l and game.is_collision(point_u)) or 
-            (dir_r and game.is_collision(point_d)),
-
-            # Danger left
-            (dir_d and game.is_collision(point_r)) or 
-            (dir_u and game.is_collision(point_l)) or 
-            (dir_r and game.is_collision(point_u)) or 
-            (dir_l and game.is_collision(point_d)),
-            
-            # Move direction
-            dir_l,
-            dir_r,
-            dir_u,
-            dir_d,
-            
-            # Food location (Target)
-            food_target.x < game.head.x,  # food left
-            food_target.x > game.head.x,  # food right
-            food_target.y < game.head.y,  # food up
-            food_target.y > game.head.y  # food down
-            ]
-
-        return np.array(state, dtype=int)
+            # Direction
+            int(dir_l), int(dir_r), int(dir_u), int(dir_d),
+            # Food
+            food_dx, food_dy,
+            # Length
+            norm_length
+        ] + ray_vals # Append the 8 ray values
+        
+        # Total size: 4 + 2 + 1 + 8 = 15
+        return np.array(state, dtype=float)
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done)) # popleft if MAX_MEMORY is reached
@@ -105,8 +178,6 @@ class Agent:
 
     def train_short_memory(self, state, action, reward, next_state, done):
         return self.trainer.train_step(state, action, reward, next_state, done, self.target_model)
-
-        return final_move
 
     def _get_reachable_area(self, game, head_x, head_y):
         """Standard Flood Fill to count reachable open nodes"""
@@ -134,6 +205,9 @@ class Agent:
         return count
 
     def get_action(self, state, game):
+        # Update Loop Monitor
+        self.loop_monitor.update(game.head, game.score)
+        
         # random moves: tradeoff exploration / exploitation
         # Epsilon Decay: Exponential decay to ensure long-term exploration
         # At game 1000, epsilon ~ 29. At game 2000, epsilon ~ 10.
@@ -144,7 +218,7 @@ class Agent:
             move = random.randint(0, 2)
             final_move[move] = 1
         else:
-            state0 = torch.tensor(np.array(state), dtype=torch.float)
+            state0 = torch.tensor(np.array(state), dtype=torch.float).unsqueeze(0)
             prediction = self.model(state0)
             move = torch.argmax(prediction).item()
             final_move[move] = 1
@@ -173,14 +247,28 @@ class Agent:
             # (1) Immediate Collision Check
             if not game.is_collision(Point(cx, cy)):
                 # (2) Free-space Estimation (Flood Fill)
-                # Only strictly required if we are near obstacles, but good to run.
+                # Only strictly required if we are near obstacles, but good enough to run.
                 # Heuristic: If reachable area < snake length, it's a trap.
                 area = self._get_reachable_area(game, cx, cy)
                 if area > len(game.snake): 
                      safe_moves.append(i)
         
+        # 1.5 Loop Breaking (Overrides prediction if stuck)
+        if self.loop_monitor.is_stuck() and safe_moves:
+             # Force a random safe move that is NOT the proposed move (if possible)
+             # to break the cycle.
+             possible_escapes = [m for m in safe_moves if m != proposed_move_idx]
+             if possible_escapes:
+                 new_move_idx = random.choice(possible_escapes)
+             else:
+                 new_move_idx = random.choice(safe_moves)
+                 
+             final_move = [0, 0, 0]
+             final_move[new_move_idx] = 1
+             # print("Loop detected! Forcing escape.") # Optional debug
+        
         # 2. If proposed move is NOT in safe_moves, override it
-        if proposed_move_idx not in safe_moves:
+        elif proposed_move_idx not in safe_moves:
             if safe_moves:
                 # Pick the safe move that the model prefers (highest Q), or random safe
                 # For simplicity, pick random safe or the first one.
@@ -205,7 +293,7 @@ def train(target_level=None):
     
     agent = Agent()
     # Headless training (render=False) for speed
-    game = SnakeGameAI(render=False)
+    game = SnakeGameAI(render=True)
 
     # Curriculum Learning State
     possible_levels = LevelManager.LEVELS
@@ -213,14 +301,6 @@ def train(target_level=None):
     stagnation_counter = 0
     stagnation_limit = 50 # If no improvement for 50 games, switch level
     
-    # Override if target_level is set
-    if target_level:
-        if target_level not in possible_levels:
-            print(f"Error: Level '{target_level}' not found. Available: {possible_levels}")
-            return
-        current_level_idx = possible_levels.index(target_level)
-        print(f"Forcing Training on Level: {target_level}")
-
     # Load training state (n_games, best_mean_score, curriculum)
     best_mean_score = 0
     if os.path.exists('model/training_state.json'):
@@ -235,6 +315,14 @@ def train(target_level=None):
             
             print(f"Resumed training from Game {agent.n_games}, Best Mean: {best_mean_score}")
             print(f"Resumed Level: {possible_levels[current_level_idx]} (Stagnation: {stagnation_counter})")
+
+    # Override if target_level is set
+    if target_level:
+        if target_level not in possible_levels:
+            print(f"Error: Level '{target_level}' not found. Available: {possible_levels}")
+            return
+        current_level_idx = possible_levels.index(target_level)
+        print(f"Forcing Training on Level: {target_level}")
     
     # Set initial level
     game.set_level(possible_levels[current_level_idx])
@@ -262,6 +350,7 @@ def train(target_level=None):
             game.reset()
             agent.n_games += 1
             agent.train_long_memory()
+            agent.loop_monitor.clear()
 
             scores_window.append(score)
             mean_score = sum(scores_window) / len(scores_window)

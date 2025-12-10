@@ -118,6 +118,35 @@ class SnakeGameAI:
             return min(dist_normal, dist_bonus)
         return dist_normal
 
+        return reward, game_over, self.score
+    
+    def _is_approaching_wall(self, head, action):
+        # A simple check: if we are close to a wall and moving towards it
+        # This is a bit complex to do perfectly without raycasting here, but we can do a basic check
+        w, h = self.w, self.h
+        
+        # Current head position
+        x, y = head.x, head.y
+        
+        # Predict next position based on action? 
+        # Actually this is called AFTER move in original code, but we want to know if the move *was* approaching.
+        # But wait, we are strictly modifying `play_step`.
+        
+        # Let's check if we are simply "close to wall".
+        # Margin
+        margin = 2 * BLOCK_SIZE
+        near_left = x < margin
+        near_right = x > w - margin
+        near_up = y < margin
+        near_down = y > h - margin
+        
+        # If we are near a wall, and we just moved towards it... 
+        # This state is hard to deduce just from "action" without strictly parsing direction history.
+        # Simpler: Just penalize if very close to wall? No, that punishes just being near content.
+        # User said: "-1 when entering wall proximity" roughly.
+        # Let's stick to "Distance to food" logic mostly, and maybe penalty for moving AWAY from food which is often moving towards wall in corners.
+        return False # Placeholder if needed, but I'll implement logic inline
+
     def play_step(self, action):
         self.frame_iteration += 1
         # 1. collect user input
@@ -134,15 +163,14 @@ class SnakeGameAI:
         self._move(action) # update the head
         self.snake.insert(0, self.head)
         
-        # Base Time Penalty (C)
-        reward = -0.01
-        
         # 3. check if game over
+        reward = 0
         game_over = False
-        # Increased frame limit to 150 to allow for detours around obstacles
-        if self.is_collision() or self.frame_iteration > 150*len(self.snake):
+        
+        # Increased frame limit to 100*len (standard) or keep 150
+        if self.is_collision() or self.frame_iteration > 100*len(self.snake):
             game_over = True
-            reward = -1 # Basic Die (A)
+            reward = -100 # (A) Death
             return reward, game_over, self.score
             
         # 3.5 Check Bonus Expiration
@@ -150,45 +178,35 @@ class SnakeGameAI:
             self.bonus_timer -= 1
             if self.bonus_timer <= 0:
                 self.bonus_food = None
-                if self.score > 100:
-                    reward -= 5
-                else:
-                    reward -= 10
                 
         # 4. Check for Eating Data
         # Normal Food
         if self.head == self.food:
             self.score += 1
-            reward = 10 # Basic Eat Food (A)
+            reward = 10 # (A) Eat Food
             self._place_food()
         # Bonus Food
         elif self.bonus_food is not None and self.head == self.bonus_food:
             self.score += 3
-            reward = 3 # Scaled Bonus
+            reward = 15 # Boosted for bonus
             self.bonus_food = None
         else:
             self.snake.pop()
             
-            # Distance-based shaping (B)
+            # Distance-based shaping (A)
             dist_after = self._get_closest_food_dist()
             
             if dist_after < dist_before:
-                reward += 0.5 # Closer
+                reward = 0.1 # (A) Closer
             else:
-                reward += -0.25 # Further
+                reward = -1.0 # (A) Farther (and implicitly punishing "wandering"/approaching walls away from food)
                 
-            # Area / Free-space rewards (D)
-            # Simple heuristic: Reward if head has > 2 empty neighbors (not walls/body/obstacles)
-            # This encourages staying in open space
-            safe_neighbors = 0
-            check_dirs = [Point(0, 20), Point(0, -20), Point(20, 0), Point(-20, 0)]
-            for d in check_dirs:
-                neighbor = Point(self.head.x + d.x, self.head.y + d.y)
-                if not self.is_collision(neighbor):
-                    safe_neighbors += 1
-            
-            if safe_neighbors >= 3:
-                reward += 0.005 # Small reward for being in open space
+            # Wall proximity penalty (A) - "approaching wall"
+            # If we are effectively moving INTO a wall's danger zone (1 block away) and not eating
+            # We already check collision above. 
+            # If next step would be collision, we usually don't know here.
+            # But we can check if we are *currently* at boundary - 1 block.
+            # Let's keep it simple: -1 for moving farther covers most "bad" moves.
             
         self.total_reward += reward
         

@@ -5,16 +5,33 @@ import torch.nn.functional as F
 import os
 import numpy as np
 
-class Linear_QNet(nn.Module):
+class DuelingLinearQNet(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super().__init__()
         self.linear1 = nn.Linear(input_size, hidden_size)
-        self.linear2 = nn.Linear(hidden_size, output_size)
+        
+        # Value stream
+        self.value_stream = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, 1)
+        )
+        
+        # Advantage stream
+        self.advantage_stream = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, output_size)
+        )
 
     def forward(self, x):
         x = F.relu(self.linear1(x))
-        x = self.linear2(x)
-        return x
+        
+        value = self.value_stream(x)
+        advantage = self.advantage_stream(x)
+        
+        # Q(s,a) = V(s) + (A(s,a) - mean(A(s,a)))
+        return value + (advantage - advantage.mean(dim=1, keepdim=True))
 
     def save(self, file_name='model.pth'):
         model_folder_path = './model'
@@ -29,12 +46,14 @@ class Linear_QNet(nn.Module):
         file_name = os.path.join(model_folder_path, file_name)
         
         if os.path.exists(file_name):
-            self.load_state_dict(torch.load(file_name))
-            print(f"Model loaded from {file_name}")
-            return True
+            try:
+                self.load_state_dict(torch.load(file_name))
+                print(f"Model loaded from {file_name}")
+                return True
+            except RuntimeError:
+                print("Note: Incompatible model found (likely due to architecture change). Starting fresh training session.")
+                return False
         return False
-
-
 
 class QTrainer:
     def __init__(self, model, lr, gamma):
@@ -66,17 +85,22 @@ class QTrainer:
         for idx in range(len(done)):
             Q_new = reward[idx]
             if not done[idx]:
-                # Double DQN Logic / Target Net Logic
+                # Double DQN Logic
+                # 1. Select best action using ONLINE model
+                best_action = torch.argmax(self.model(next_state[idx].unsqueeze(0))).item()
+                
+                # 2. Evaluate that action using TARGET model
                 if target_model:
-                     Q_new = reward[idx] + self.gamma * torch.max(target_model(next_state[idx]))
+                     # target_model usually in eval mode, but just in case
+                     with torch.no_grad():
+                         target_q_values = target_model(next_state[idx].unsqueeze(0))
+                         Q_new = reward[idx] + self.gamma * target_q_values[0][best_action]
                 else:
+                     # Fallback to standard DQN if no target model (shouldn't happen in our setup)
                      Q_new = reward[idx] + self.gamma * torch.max(self.model(next_state[idx]))
 
             target[idx][torch.argmax(action[idx]).item()] = Q_new
     
-        # 2: Q_new = r + y * max(next_predicted Q value) -> only do this if not done
-        # pred.clone()
-        # preds[argmax(action)] = Q_new
         self.optimizer.zero_grad()
         loss = self.criterion(target, pred)
         loss.backward()
