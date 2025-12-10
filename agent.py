@@ -209,9 +209,9 @@ class Agent:
         self.loop_monitor.update(game.head, game.score)
         
         # random moves: tradeoff exploration / exploitation
-        # Epsilon Decay: Exponential decay to ensure long-term exploration
-        # At game 1000, epsilon ~ 29. At game 2000, epsilon ~ 10.
-        self.epsilon = 80 * np.exp(-0.001 * self.n_games)
+        # CRITICAL FIX: MUCH faster epsilon decay
+        # At game 50, epsilon ~ 15. At game 100, epsilon ~ 3. At game 200, epsilon ~ 0.1
+        self.epsilon = 80 * np.exp(-0.02 * self.n_games)
         
         final_move = [0,0,0]
         if random.randint(0, 200) < self.epsilon:
@@ -223,63 +223,56 @@ class Agent:
             move = torch.argmax(prediction).item()
             final_move[move] = 1
 
-        # --- Advanced Planning (Safety Overrides) ---
-        clock_wise = [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
-        idx = clock_wise.index(game.direction)
-        next_dirs = [
-            clock_wise[idx], # Straight [1,0,0]
-            clock_wise[(idx + 1) % 4], # Right [0,1,0]
-            clock_wise[(idx - 1) % 4]  # Left [0,0,1]
-        ]
+        # --- SIMPLIFIED Safety Override (Only prevent immediate death) ---
+        # CRITICAL: Reduce override frequency to allow model to learn
+        # Only override if we're about to die AND we're not exploring (epsilon is low)
+        use_safety = self.n_games > 50  # Start safety earlier
         
-        proposed_move_idx = final_move.index(1)
-        safe_moves = []
-        
-        # 1. Identify all truly safe moves using Lookahead + Flood Fill
-        for i in range(3):
-            check_dir = next_dirs[i]
-            cx, cy = game.head.x, game.head.y
-            if check_dir == Direction.RIGHT: cx += 20
-            elif check_dir == Direction.LEFT: cx -= 20
-            elif check_dir == Direction.DOWN: cy += 20
-            elif check_dir == Direction.UP: cy -= 20
+        if use_safety:
+            clock_wise = [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
+            idx = clock_wise.index(game.direction)
+            next_dirs = [
+                clock_wise[idx], # Straight [1,0,0]
+                clock_wise[(idx + 1) % 4], # Right [0,1,0]
+                clock_wise[(idx - 1) % 4]  # Left [0,0,1]
+            ]
             
-            # (1) Immediate Collision Check
-            if not game.is_collision(Point(cx, cy)):
-                # (2) Free-space Estimation (Flood Fill)
-                # Only strictly required if we are near obstacles, but good enough to run.
-                # Heuristic: If reachable area < snake length, it's a trap.
-                area = self._get_reachable_area(game, cx, cy)
-                if area > len(game.snake): 
-                     safe_moves.append(i)
-        
-        # 1.5 Loop Breaking (Overrides prediction if stuck)
-        if self.loop_monitor.is_stuck() and safe_moves:
-             # Force a random safe move that is NOT the proposed move (if possible)
-             # to break the cycle.
-             possible_escapes = [m for m in safe_moves if m != proposed_move_idx]
-             if possible_escapes:
-                 new_move_idx = random.choice(possible_escapes)
-             else:
-                 new_move_idx = random.choice(safe_moves)
-                 
-             final_move = [0, 0, 0]
-             final_move[new_move_idx] = 1
-             # print("Loop detected! Forcing escape.") # Optional debug
-        
-        # 2. If proposed move is NOT in safe_moves, override it
-        elif proposed_move_idx not in safe_moves:
-            if safe_moves:
-                # Pick the safe move that the model prefers (highest Q), or random safe
-                # For simplicity, pick random safe or the first one.
-                # Ideal: Pick safe move with highest prediction?
-                # Let's just pick random safe to avoid getting stuck in loops.
-                new_move_idx = random.choice(safe_moves)
-                final_move = [0, 0, 0]
-                final_move[new_move_idx] = 1
-            else:
-                 # No safe moves? We are dead. Keep original move.
-                 pass
+            proposed_move_idx = final_move.index(1)
+            proposed_dir = next_dirs[proposed_move_idx]
+            
+            # Check if proposed move leads to immediate collision
+            cx, cy = game.head.x, game.head.y
+            if proposed_dir == Direction.RIGHT: cx += 20
+            elif proposed_dir == Direction.LEFT: cx -= 20
+            elif proposed_dir == Direction.DOWN: cy += 20
+            elif proposed_dir == Direction.UP: cy -= 20
+            
+            # Only override if immediate death
+            if game.is_collision(Point(cx, cy)):
+                # Find safe moves (simple collision check only, no flood fill)
+                safe_moves = []
+                for i in range(3):
+                    check_dir = next_dirs[i]
+                    test_x, test_y = game.head.x, game.head.y
+                    if check_dir == Direction.RIGHT: test_x += 20
+                    elif check_dir == Direction.LEFT: test_x -= 20
+                    elif check_dir == Direction.DOWN: test_y += 20
+                    elif check_dir == Direction.UP: test_y -= 20
+                    
+                    if not game.is_collision(Point(test_x, test_y)):
+                        safe_moves.append(i)
+                
+                # Override only if there are safe alternatives
+                if safe_moves:
+                    # Pick safe move with highest Q-value
+                    state0 = torch.tensor(np.array(state), dtype=torch.float).unsqueeze(0)
+                    with torch.no_grad():
+                        q_values = self.model(state0)[0]
+                    
+                    # Choose best safe move
+                    best_safe_move = max(safe_moves, key=lambda m: q_values[m].item())
+                    final_move = [0, 0, 0]
+                    final_move[best_safe_move] = 1
 
         return final_move
 
@@ -372,7 +365,11 @@ def train(target_level=None):
                     json.dump(state_data, f)
                 
                 saved = True
-            print('Game', agent.n_games, 'Score', score, 'Mean', mean_score, 'Best Mean', best_mean_score, 'Loss', loss, 'Saved' if saved else '')
+            
+            # Print training progress with epsilon
+            print('Game', agent.n_games, 'Score', score, 'Mean', f'{mean_score:.2f}', 
+                  'Best Mean', f'{best_mean_score:.2f}', 'Epsilon', f'{agent.epsilon:.2f}',
+                  'Loss', f'{loss:.4f}', 'SAVED' if saved else '')
 
             if saved:
                  stagnation_counter = 0 # Reset counter on improvement
@@ -437,7 +434,39 @@ def test_levels():
 if __name__ == '__main__':
     # Default to train, but allows simple toggle or CLI later
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == 'test':
+    
+    # Check for parallel training mode
+    if '--parallel' in sys.argv:
+        from parallel_trainer import ParallelTrainer
+        
+        num_workers = None
+        target_level = None
+        
+        # Parse workers argument
+        if '--workers' in sys.argv:
+            idx = sys.argv.index('--workers')
+            if idx + 1 < len(sys.argv):
+                try:
+                    num_workers = int(sys.argv[idx + 1])
+                except ValueError:
+                    print("Error: --workers must be followed by a number")
+                    sys.exit(1)
+        
+        # Parse level argument
+        if len(sys.argv) > 1:
+            for i, arg in enumerate(sys.argv):
+                if arg not in ['--parallel', '--workers'] and not arg.isdigit() and arg.endswith('.py') == False:
+                    if i > 0 and sys.argv[i-1] != '--workers':
+                        target_level = arg
+                        break
+        
+        print("=" * 50)
+        print("PARALLEL TRAINING MODE")
+        print("=" * 50)
+        trainer = ParallelTrainer(num_workers=num_workers, target_level=target_level)
+        trainer.train()
+    
+    elif len(sys.argv) > 1 and sys.argv[1] == 'test':
         if len(sys.argv) > 2:
              test(target_level=sys.argv[2])
         else:

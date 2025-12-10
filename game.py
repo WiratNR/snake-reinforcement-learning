@@ -170,7 +170,7 @@ class SnakeGameAI:
         # Increased frame limit to 100*len (standard) or keep 150
         if self.is_collision() or self.frame_iteration > 100*len(self.snake):
             game_over = True
-            reward = -100 # (A) Death
+            reward = -10  # REDUCED: Less harsh death penalty
             return reward, game_over, self.score
             
         # 3.5 Check Bonus Expiration
@@ -183,31 +183,24 @@ class SnakeGameAI:
         # Normal Food
         if self.head == self.food:
             self.score += 1
-            reward = 10 # (A) Eat Food
+            reward = 10  # Eat Food reward
             self._place_food()
         # Bonus Food
         elif self.bonus_food is not None and self.head == self.bonus_food:
             self.score += 3
-            reward = 15 # Boosted for bonus
+            reward = 20  # INCREASED: Better bonus reward
             self.bonus_food = None
         else:
             self.snake.pop()
             
-            # Distance-based shaping (A)
+            # BALANCED: Distance-based shaping
             dist_after = self._get_closest_food_dist()
             
             if dist_after < dist_before:
-                reward = 0.1 # (A) Closer
+                reward = 1  # INCREASED: Reward for getting closer
             else:
-                reward = -1.0 # (A) Farther (and implicitly punishing "wandering"/approaching walls away from food)
+                reward = -1  # SAME: Small penalty for moving away
                 
-            # Wall proximity penalty (A) - "approaching wall"
-            # If we are effectively moving INTO a wall's danger zone (1 block away) and not eating
-            # We already check collision above. 
-            # If next step would be collision, we usually don't know here.
-            # But we can check if we are *currently* at boundary - 1 block.
-            # Let's keep it simple: -1 for moving farther covers most "bad" moves.
-            
         self.total_reward += reward
         
         # 5. update ui and clock

@@ -25,13 +25,25 @@ class DuelingLinearQNet(nn.Module):
         )
 
     def forward(self, x):
+        # Handle both 1D and 2D inputs
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)
+            squeeze_output = True
+        else:
+            squeeze_output = False
+            
         x = F.relu(self.linear1(x))
         
         value = self.value_stream(x)
         advantage = self.advantage_stream(x)
         
         # Q(s,a) = V(s) + (A(s,a) - mean(A(s,a)))
-        return value + (advantage - advantage.mean(dim=1, keepdim=True))
+        q_values = value + (advantage - advantage.mean(dim=1, keepdim=True))
+        
+        if squeeze_output:
+            q_values = q_values.squeeze(0)
+            
+        return q_values
 
     def save(self, file_name='model.pth'):
         model_folder_path = './model'
@@ -54,6 +66,15 @@ class DuelingLinearQNet(nn.Module):
                 print("Note: Incompatible model found (likely due to architecture change). Starting fresh training session.")
                 return False
         return False
+    
+    def get_weights(self):
+        """Get model weights for sharing between processes"""
+        return {k: v.cpu().numpy() for k, v in self.state_dict().items()}
+    
+    def set_weights(self, weights):
+        """Set model weights from shared weights dictionary"""
+        state_dict = {k: torch.tensor(v) for k, v in weights.items()}
+        self.load_state_dict(state_dict)
 
 class QTrainer:
     def __init__(self, model, lr, gamma):
@@ -96,8 +117,9 @@ class QTrainer:
                          target_q_values = target_model(next_state[idx].unsqueeze(0))
                          Q_new = reward[idx] + self.gamma * target_q_values[0][best_action]
                 else:
-                     # Fallback to standard DQN if no target model (shouldn't happen in our setup)
-                     Q_new = reward[idx] + self.gamma * torch.max(self.model(next_state[idx]))
+                     # CRITICAL FIX: Fallback to standard DQN if no target model
+                     with torch.no_grad():
+                         Q_new = reward[idx] + self.gamma * torch.max(self.model(next_state[idx].unsqueeze(0)))
 
             target[idx][torch.argmax(action[idx]).item()] = Q_new
     
