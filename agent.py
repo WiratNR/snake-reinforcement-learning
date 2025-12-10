@@ -207,24 +207,30 @@ def train():
     # Headless training (render=False) for speed
     game = SnakeGameAI(render=False)
 
-    # Load training state (n_games, best_mean_score)
+    # Curriculum Learning State
+    possible_levels = LevelManager.LEVELS
+    current_level_idx = 0
+    stagnation_counter = 0
+    stagnation_limit = 50 # If no improvement for 50 games, switch level
+
+    # Load training state (n_games, best_mean_score, curriculum)
     best_mean_score = 0
     if os.path.exists('model/training_state.json'):
         with open('model/training_state.json', 'r') as f:
             state_data = json.load(f)
             agent.n_games = state_data.get('n_games', 0)
             best_mean_score = state_data.get('best_mean_score', 0)
-            print(f"Resumed training from Game {agent.n_games}, Best Mean: {best_mean_score}")
             
-    # Curriculum Learning State
-    possible_levels = LevelManager.LEVELS
-    current_level_idx = 0
-    stagnation_counter = 0
-    stagnation_limit = 50 # If no improvement for 50 games, switch level
+            # Load Curriculum State
+            current_level_idx = state_data.get('current_level_idx', 0)
+            stagnation_counter = state_data.get('stagnation_counter', 0)
+            
+            print(f"Resumed training from Game {agent.n_games}, Best Mean: {best_mean_score}")
+            print(f"Resumed Level: {possible_levels[current_level_idx]} (Stagnation: {stagnation_counter})")
     
     # Set initial level
     game.set_level(possible_levels[current_level_idx])
-    print(f"Starting Level: {possible_levels[current_level_idx]}")
+    # print(f"Starting Level: {possible_levels[current_level_idx]}") # Already printed above
     
     while True:
         # get old state
@@ -261,8 +267,10 @@ def train():
                 # Save training state
                 state_data = {
                     'n_games': agent.n_games,
-                    'best_mean_score': best_mean_score
-            }
+                    'best_mean_score': best_mean_score,
+                    'current_level_idx': current_level_idx,
+                    'stagnation_counter': stagnation_counter
+                }
                 with open('model/training_state.json', 'w') as f:
                     json.dump(state_data, f)
                 
@@ -305,10 +313,31 @@ def test():
             game.reset()
             print('Game Over. Score:', score)
 
+def test_levels():
+    """Runs one game for each level type to verify performance"""
+    agent = Agent()
+    game = SnakeGameAI(render=True)
+    agent.n_games = 1000 # Force low epsilon
+    
+    for level_name in LevelManager.LEVELS:
+        print(f"--- Testing Level: {level_name} ---")
+        game.set_level(level_name)
+        
+        while True:
+            state_old = agent.get_state(game)
+            final_move = agent.get_action(state_old, game)
+            reward, done, score = game.play_step(final_move)
+            
+            if done:
+                print(f"Level {level_name} Finished. Score: {score}")
+                break # Move to next level
+
 if __name__ == '__main__':
     # Default to train, but allows simple toggle or CLI later
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == 'test':
         test()
+    elif len(sys.argv) > 1 and sys.argv[1] == 'test_level':
+        test_levels()
     else:
         train()

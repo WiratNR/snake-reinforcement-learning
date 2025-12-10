@@ -63,7 +63,9 @@ class SnakeGameAI:
         self.score = 0
         self.total_reward = 0
         self.food = None
+        self.food = None
         self.bonus_food = None
+        self.bonus_timer = 0
         self.obstacles = []
         self._place_obstacles()
         self._place_food()
@@ -97,6 +99,7 @@ class SnakeGameAI:
         x = random.randint(0, (self.w-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE 
         y = random.randint(0, (self.h-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE
         self.bonus_food = Point(x, y)
+        self.bonus_timer = 50 # Bonus lasts for 50 frames
         if self.bonus_food in self.snake or self.bonus_food in self.obstacles or self.bonus_food == self.food:
             self._place_bonus_food()
         
@@ -142,6 +145,12 @@ class SnakeGameAI:
             reward = -1 # Basic Die (A)
             return reward, game_over, self.score
             
+        # 3.5 Check Bonus Expiration
+        if self.bonus_food:
+            self.bonus_timer -= 1
+            if self.bonus_timer <= 0:
+                self.bonus_food = None
+                
         # 4. Check for Eating Data
         # Normal Food
         if self.head == self.food:
