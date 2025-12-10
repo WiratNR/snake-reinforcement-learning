@@ -3,6 +3,7 @@ import random
 from enum import Enum
 from collections import namedtuple
 import numpy as np
+from levels import LevelManager
 
 pygame.init()
 font = pygame.font.SysFont('arial', 25)
@@ -63,14 +64,14 @@ class SnakeGameAI:
         self.frame_iteration = 0
         
     def _place_obstacles(self):
+        # Use external LevelManager to get a random level
+        # IMPORTANT: 'Point' in levels.py might be distinct from 'Point' here if not handled carefully
+        # But namedtokens are compatible if fields match.
+        raw_obstacles = LevelManager.get_random_level(self.w, self.h)
         self.obstacles = []
-        # Generate 3-5 random obstacles
-        num_obstacles = random.randint(3, 5)
-        for _ in range(num_obstacles):
-            x = random.randint(0, (self.w-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE 
-            y = random.randint(0, (self.h-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE
-            pt = Point(x, y)
-            # Ensure obstacle is not on snake or too close to head start
+        # Convert to local Point just in case, though they are likely compatible
+        for p in raw_obstacles:
+            pt = Point(p.x, p.y)
             if pt not in self.snake and pt != self.head:
                 self.obstacles.append(pt)
 

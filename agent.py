@@ -108,6 +108,33 @@ class Agent:
     def train_short_memory(self, state, action, reward, next_state, done):
         return self.trainer.train_step(state, action, reward, next_state, done, self.target_model)
 
+        return final_move
+
+    def _get_reachable_area(self, game, head_x, head_y):
+        """Standard Flood Fill to count reachable open nodes"""
+        queue = deque([(head_x, head_y)])
+        visited = set([(head_x, head_y)])
+        count = 0
+        limit = len(game.snake) * 2 # Optimization: Don't search forever. 2x length is safe enough.
+        
+        while queue:
+            cx, cy = queue.popleft()
+            count += 1
+            if count > limit:
+                return count # Sufficiently large
+            
+            # Check neighbors
+            for dx, dy in [(20,0), (-20,0), (0,20), (0,-20)]:
+                nx, ny = cx + dx, cy + dy
+                # Basic bounds check + collision check (simulating virtual move)
+                # Note: game.is_collision checks against CURRENT snake. 
+                # This is slightly inaccurate as snake tail moves, but good enough heuristic.
+                pt = Point(nx, ny)
+                if pt not in visited and not game.is_collision(pt):
+                     visited.add((nx, ny))
+                     queue.append((nx, ny))
+        return count
+
     def get_action(self, state, game):
         # random moves: tradeoff exploration / exploitation
         self.epsilon = 80 - self.n_games
@@ -121,57 +148,50 @@ class Agent:
             move = torch.argmax(prediction).item()
             final_move[move] = 1
 
-        # --- Safety Heuristic (Lookahead) ---
-        # Prevent "dumb" deaths from hitting walls/self if a safe move exists
-        # This overrides both random and model-predicted moves if they are fatal
-        
-        # 1. Simulate the move
-        # We need to know what "move 0, 1, 2" means for current direction
-        # [straight, right, left]
-        
-        # Map move index to direction change
+        # --- Advanced Planning (Safety Overrides) ---
         clock_wise = [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
         idx = clock_wise.index(game.direction)
-        
-        proposed_move_idx = final_move.index(1)
         next_dirs = [
-            clock_wise[idx], # Straight
-            clock_wise[(idx + 1) % 4], # Right
-            clock_wise[(idx - 1) % 4]  # Left
+            clock_wise[idx], # Straight [1,0,0]
+            clock_wise[(idx + 1) % 4], # Right [0,1,0]
+            clock_wise[(idx - 1) % 4]  # Left [0,0,1]
         ]
         
-        proposed_dir = next_dirs[proposed_move_idx]
+        proposed_move_idx = final_move.index(1)
+        safe_moves = []
         
-        # Check if proposed dir causes collision
-        # Calculate next head position
-        x = game.head.x
-        y = game.head.y
-        if proposed_dir == Direction.RIGHT: x += 20
-        elif proposed_dir == Direction.LEFT: x -= 20
-        elif proposed_dir == Direction.DOWN: y += 20
-        elif proposed_dir == Direction.UP: y -= 20
+        # 1. Identify all truly safe moves using Lookahead + Flood Fill
+        for i in range(3):
+            check_dir = next_dirs[i]
+            cx, cy = game.head.x, game.head.y
+            if check_dir == Direction.RIGHT: cx += 20
+            elif check_dir == Direction.LEFT: cx -= 20
+            elif check_dir == Direction.DOWN: cy += 20
+            elif check_dir == Direction.UP: cy -= 20
+            
+            # (1) Immediate Collision Check
+            if not game.is_collision(Point(cx, cy)):
+                # (2) Free-space Estimation (Flood Fill)
+                # Only strictly required if we are near obstacles, but good to run.
+                # Heuristic: If reachable area < snake length, it's a trap.
+                area = self._get_reachable_area(game, cx, cy)
+                if area > len(game.snake): 
+                     safe_moves.append(i)
         
-        point_check = Point(x, y)
-        if game.is_collision(point_check):
-            # Proposed move dies. Try to find a safe one.
-            safe_move_found = False
-            for i in range(3):
-                if i == proposed_move_idx: continue # Skip the deadly one
-                
-                check_dir = next_dirs[i]
-                cx, cy = game.head.x, game.head.y
-                if check_dir == Direction.RIGHT: cx += 20
-                elif check_dir == Direction.LEFT: cx -= 20
-                elif check_dir == Direction.DOWN: cy += 20
-                elif check_dir == Direction.UP: cy -= 20
-                
-                if not game.is_collision(Point(cx, cy)):
-                    # Found safe move
-                    final_move = [0, 0, 0]
-                    final_move[i] = 1
-                    safe_move_found = True
-                    break
-        
+        # 2. If proposed move is NOT in safe_moves, override it
+        if proposed_move_idx not in safe_moves:
+            if safe_moves:
+                # Pick the safe move that the model prefers (highest Q), or random safe
+                # For simplicity, pick random safe or the first one.
+                # Ideal: Pick safe move with highest prediction?
+                # Let's just pick random safe to avoid getting stuck in loops.
+                new_move_idx = random.choice(safe_moves)
+                final_move = [0, 0, 0]
+                final_move[new_move_idx] = 1
+            else:
+                 # No safe moves? We are dead. Keep original move.
+                 pass
+
         return final_move
 
 

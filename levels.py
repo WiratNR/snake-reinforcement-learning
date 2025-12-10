@@ -1,0 +1,81 @@
+import random
+from collections import namedtuple
+
+Point = namedtuple('Point', 'x, y')
+BLOCK_SIZE = 20
+
+class LevelManager:
+    
+    @staticmethod
+    def get_random_level(w, h):
+        """Randomly selects a level pattern"""
+        patterns = [
+            LevelManager.random_obstacles,
+            LevelManager.box_obstacles,
+            LevelManager.cross_obstacles,
+            LevelManager.border_obstacles
+        ]
+        chosen_pattern = random.choice(patterns)
+        return chosen_pattern(w, h)
+
+    @staticmethod
+    def random_obstacles(w, h):
+        """Old logic: 3-5 random blocks"""
+        obstacles = []
+        num_obstacles = random.randint(3, 5)
+        for _ in range(num_obstacles):
+            x = random.randint(0, (w-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE 
+            y = random.randint(0, (h-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE
+            obstacles.append(Point(x, y))
+        return obstacles
+
+    @staticmethod
+    def box_obstacles(w, h):
+        """A box shape in the middle"""
+        obstacles = []
+        center_x, center_y = w // 2, h // 2
+        
+        # 4 blocks around center
+        # Left wall
+        obstacles.append(Point(center_x - 3*BLOCK_SIZE, center_y - BLOCK_SIZE))
+        obstacles.append(Point(center_x - 3*BLOCK_SIZE, center_y))
+        obstacles.append(Point(center_x - 3*BLOCK_SIZE, center_y + BLOCK_SIZE))
+        
+        # Right wall
+        obstacles.append(Point(center_x + 3*BLOCK_SIZE, center_y - BLOCK_SIZE))
+        obstacles.append(Point(center_x + 3*BLOCK_SIZE, center_y))
+        obstacles.append(Point(center_x + 3*BLOCK_SIZE, center_y + BLOCK_SIZE))
+        
+        return obstacles
+
+    @staticmethod
+    def cross_obstacles(w, h):
+        """Cross shape"""
+        obstacles = []
+        center_x, center_y = w // 2, h // 2
+        
+        # Horizontal line
+        for i in range(-2, 3):
+            if i == 0: continue # Leave center open
+            obstacles.append(Point(center_x + i*BLOCK_SIZE, center_y))
+            
+        # Vertical line
+        for i in range(-2, 3):
+            if i == 0: continue
+            obstacles.append(Point(center_x, center_y + i*BLOCK_SIZE))
+            
+        return obstacles
+
+    @staticmethod
+    def border_obstacles(w, h):
+        """Random blocks near the edges"""
+        obstacles = []
+        # Place 4 blocks near corners but not exactly in corner
+        margin = 3 * BLOCK_SIZE
+        
+        obstacles.append(Point(margin, margin))
+        obstacles.append(Point(w - margin, margin))
+        obstacles.append(Point(margin, h - margin))
+        obstacles.append(Point(w - margin, h - margin))
+        
+        return obstacles
