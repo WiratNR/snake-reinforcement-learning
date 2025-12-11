@@ -258,8 +258,11 @@ class ParallelTrainer:
                     
                     training_steps += 1
                     
-                    # Update target network periodically
-                    if training_steps % 10 == 0:
+                    # Update learning rate scheduler based on loss
+                    self.agent.trainer.scheduler.step(last_loss)
+                    
+                    # Update target network periodically (INCREASED to 20 for stability)
+                    if training_steps % 20 == 0:
                         self.agent.target_model.load_state_dict(self.agent.model.state_dict())
                     
                     # Broadcast weights to workers more frequently

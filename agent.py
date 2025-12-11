@@ -11,7 +11,7 @@ from helper import plot
 
 MAX_MEMORY = 100_000
 BATCH_SIZE = 4000  # INCREASED: Larger batch for more stable gradients
-LR = 0.0001  # REDUCED: Lower learning rate for better convergence and lower loss
+LR = 0.00005  # FURTHER REDUCED: Even lower learning rate for finer convergence and lower loss
 
 class LoopMonitor:
     def __init__(self, history_len=100, threshold=4):
@@ -47,7 +47,7 @@ class Agent:
     def __init__(self):
         self.n_games = 0
         self.epsilon = 0 # randomness
-        self.gamma = 0.95 # INCREASED: Higher discount rate for better long-term planning
+        self.gamma = 0.97 # FURTHER INCREASED: Even higher discount rate for better long-term planning
         self.memory = deque(maxlen=MAX_MEMORY) # popleft()
         self.loop_monitor = LoopMonitor()
         
@@ -171,10 +171,14 @@ class Agent:
             mini_sample = self.memory
 
         states, actions, rewards, next_states, dones = zip(*mini_sample)
-        self.trainer.train_step(states, actions, rewards, next_states, dones, self.target_model)
+        loss = self.trainer.train_step(states, actions, rewards, next_states, dones, self.target_model)
+        
+        # Update learning rate scheduler based on loss
+        self.trainer.scheduler.step(loss)
         
         # Update target network weights (Soft/Delayed update)
-        if self.n_games % 10 == 0:
+        # INCREASED: Update every 20 games for more stable training
+        if self.n_games % 20 == 0:
             self.target_model.load_state_dict(self.model.state_dict())
 
     def train_short_memory(self, state, action, reward, next_state, done):
@@ -210,9 +214,9 @@ class Agent:
         self.loop_monitor.update(game.head, game.score)
         
         # random moves: tradeoff exploration / exploitation
-        # Epsilon decay: slower decay for better exploration
-        # At game 100: ε ≈ 0.48, game 200: ε ≈ 0.29, game 400: ε ≈ 0.11, game 600+: ε ≈ 0.05
-        self.epsilon = max(0.05, 0.8 * np.exp(-0.005 * self.n_games))
+        # FASTER DECAY: Reduce random exploration faster
+        # At game 100: ε ≈ 0.36, game 200: ε ≈ 0.16, game 300: ε ≈ 0.07
+        self.epsilon = max(0.02, 0.8 * np.exp(-0.008 * self.n_games))
         
         final_move = [0,0,0]
         if random.random() < self.epsilon:

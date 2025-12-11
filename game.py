@@ -70,6 +70,7 @@ class SnakeGameAI:
         self._place_obstacles()
         self._place_food()
         self.frame_iteration = 0
+        self.last_food_frame = 0  # Track when food was last collected
         
     def _place_obstacles(self):
         # Use external LevelManager
@@ -117,8 +118,24 @@ class SnakeGameAI:
             dist_bonus = abs(self.head.x - self.bonus_food.x) + abs(self.head.y - self.bonus_food.y)
             return min(dist_normal, dist_bonus)
         return dist_normal
-
-        return reward, game_over, self.score
+    
+    def _count_free_adjacent_spaces(self, pt):
+        """Count how many adjacent spaces are free (not wall, body, or obstacle)"""
+        free_count = 0
+        directions = [(BLOCK_SIZE, 0), (-BLOCK_SIZE, 0), (0, BLOCK_SIZE), (0, -BLOCK_SIZE)]
+        
+        for dx, dy in directions:
+            next_pt = Point(pt.x + dx, pt.y + dy)
+            if not self.is_collision(next_pt):
+                free_count += 1
+        
+        return free_count
+    
+    def _is_near_wall(self, pt):
+        """Check if point is near wall (within 2 blocks)"""
+        margin = 2 * BLOCK_SIZE
+        return (pt.x < margin or pt.x > self.w - margin - BLOCK_SIZE or 
+                pt.y < margin or pt.y > self.h - margin - BLOCK_SIZE)
     
     def _is_approaching_wall(self, head, action):
         # A simple check: if we are close to a wall and moving towards it
@@ -167,8 +184,8 @@ class SnakeGameAI:
         reward = 0
         game_over = False
         
-        # Increased frame limit to 100*len (standard) or keep 150
-        if self.is_collision() or self.frame_iteration > 100*len(self.snake):
+        # RELAXED: Increased frame limit to give more time to find food
+        if self.is_collision() or self.frame_iteration > 150*len(self.snake):
             game_over = True
             reward = -10  # REDUCED: Less harsh death penalty
             return reward, game_over, self.score
@@ -184,11 +201,21 @@ class SnakeGameAI:
         if self.head == self.food:
             self.score += 1
             reward = 10  # Eat Food reward
+            # Efficiency reward: Reward for collecting food quickly
+            time_to_collect = self.frame_iteration - self.last_food_frame
+            if time_to_collect > 0: # Avoid division by zero
+                reward += max(0, 5 - (time_to_collect / 10)) # Max 5, decreases with time
+            self.last_food_frame = self.frame_iteration
             self._place_food()
         # Bonus Food
         elif self.bonus_food is not None and self.head == self.bonus_food:
             self.score += 3
             reward = 20  # INCREASED: Better bonus reward
+            # Efficiency reward for bonus food
+            time_to_collect = self.frame_iteration - self.last_food_frame
+            if time_to_collect > 0:
+                reward += max(0, 10 - (time_to_collect / 5)) # Higher max, faster decrease for bonus
+            self.last_food_frame = self.frame_iteration
             self.bonus_food = None
         else:
             self.snake.pop()
@@ -197,9 +224,23 @@ class SnakeGameAI:
             dist_after = self._get_closest_food_dist()
             
             if dist_after < dist_before:
-                reward = 1  # INCREASED: Reward for getting closer
+                reward += 1  # INCREASED: Reward for getting closer
             else:
-                reward = -1  # SAME: Small penalty for moving away
+                reward -= 1  # SAME: Small penalty for moving away
+            
+            # SURVIVAL BONUS: Increased to encourage staying alive
+            reward += 0.05
+            
+            # WALL PROXIMITY PENALTY: Reduced to avoid excessive penalties
+            if self._is_near_wall(self.head):
+                reward -= 0.2
+            
+            # TRAP PENALTY: Reduced to avoid discouraging survival
+            free_spaces = self._count_free_adjacent_spaces(self.head)
+            if free_spaces <= 1:
+                reward -= 1  # Dangerous situation - reduced from -2
+            elif free_spaces == 2:
+                reward -= 0.2  # Somewhat risky - reduced from -0.5
                 
         self.total_reward += reward
         

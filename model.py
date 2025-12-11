@@ -143,6 +143,18 @@ class QTrainer:
         self.optimizer = optim.Adam(model.parameters(), lr=self.lr)
         # Huber Loss: More robust than MSE, less sensitive to outliers
         self.criterion = nn.SmoothL1Loss()  # Huber Loss
+        
+        # Learning Rate Scheduler: Reduce LR when loss plateaus
+        # patience=10: wait 10 calls before reducing
+        # factor=0.5: reduce LR by half
+        # min_lr=1e-6: don't go below this value
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, 
+            mode='min', 
+            factor=0.5, 
+            patience=10, 
+            min_lr=1e-6
+        )
 
     def train_step(self, state, action, reward, next_state, done, target_model=None):
         state = torch.tensor(np.array(state), dtype=torch.float)
