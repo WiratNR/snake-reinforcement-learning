@@ -10,8 +10,8 @@ from model import DuelingLinearQNet, QTrainer
 from helper import plot
 
 MAX_MEMORY = 100_000
-BATCH_SIZE = 1000
-LR = 0.001
+BATCH_SIZE = 4000  # INCREASED: Larger batch for more stable gradients
+LR = 0.0001  # REDUCED: Lower learning rate for better convergence and lower loss
 
 class LoopMonitor:
     def __init__(self, history_len=100, threshold=4):
@@ -47,7 +47,7 @@ class Agent:
     def __init__(self):
         self.n_games = 0
         self.epsilon = 0 # randomness
-        self.gamma = 0.9 # discount rate
+        self.gamma = 0.95 # INCREASED: Higher discount rate for better long-term planning
         self.memory = deque(maxlen=MAX_MEMORY) # popleft()
         self.loop_monitor = LoopMonitor()
         
