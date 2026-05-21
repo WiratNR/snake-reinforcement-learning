@@ -684,7 +684,7 @@ class Agent:
             if planned_move is not None:
                 return planned_move
 
-        if self.epsilon >= 0.01 and random.randint(0, 200) < self.epsilon:
+        if random.randint(0, 200) < self.epsilon:
             move = random.randint(0, 2)
             final_move[move] = 1
         else:
