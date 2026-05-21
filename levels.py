@@ -61,12 +61,14 @@ class LevelManager:
         
         # Horizontal line
         for i in range(-2, 3):
-            if i == 0: continue # Leave center open
+            if abs(i) <= 1:
+                continue # Leave spawn and adjacent escape cells open
             obstacles.append(Point(center_x + i*BLOCK_SIZE, center_y))
             
         # Vertical line
         for i in range(-2, 3):
-            if i == 0: continue
+            if abs(i) <= 1:
+                continue
             obstacles.append(Point(center_x, center_y + i*BLOCK_SIZE))
             
         return obstacles
