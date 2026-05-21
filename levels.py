@@ -43,12 +43,10 @@ class LevelManager:
         # 4 blocks around center
         # Left wall
         obstacles.append(Point(center_x - 3*BLOCK_SIZE, center_y - BLOCK_SIZE))
-        obstacles.append(Point(center_x - 3*BLOCK_SIZE, center_y))
         obstacles.append(Point(center_x - 3*BLOCK_SIZE, center_y + BLOCK_SIZE))
         
         # Right wall
         obstacles.append(Point(center_x + 3*BLOCK_SIZE, center_y - BLOCK_SIZE))
-        obstacles.append(Point(center_x + 3*BLOCK_SIZE, center_y))
         obstacles.append(Point(center_x + 3*BLOCK_SIZE, center_y + BLOCK_SIZE))
         
         return obstacles
