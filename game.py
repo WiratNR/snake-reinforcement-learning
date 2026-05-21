@@ -83,25 +83,41 @@ class SnakeGameAI:
                 self.obstacles.append(pt)
 
     def _place_food(self):
-        # 1. Place Normal Food (Always)
-        x = random.randint(0, (self.w-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE 
-        y = random.randint(0, (self.h-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE
-        self.food = Point(x, y)
-        if self.food in self.snake or self.food in self.obstacles or self.food == self.bonus_food:
-            self._place_food()
+        free_points = self._get_free_points(exclude_food=True)
+        if not free_points:
+            self.food = None
             return
+
+        self.food = random.choice(free_points)
 
         # 2. Try to place Bonus Food (30% chance if not exists)
         if self.bonus_food is None and random.random() < 0.3:
             self._place_bonus_food()
             
     def _place_bonus_food(self):
-        x = random.randint(0, (self.w-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE 
-        y = random.randint(0, (self.h-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE
-        self.bonus_food = Point(x, y)
+        free_points = self._get_free_points(exclude_bonus=True)
+        if not free_points:
+            self.bonus_food = None
+            self.bonus_timer = 0
+            return
+
+        self.bonus_food = random.choice(free_points)
         self.bonus_timer = 150 # Bonus lasts long enough for planned routes
-        if self.bonus_food in self.snake or self.bonus_food in self.obstacles or self.bonus_food == self.food:
-            self._place_bonus_food()
+
+    def _get_free_points(self, exclude_food=False, exclude_bonus=False):
+        blocked = set(self.snake) | set(self.obstacles)
+        if not exclude_food and self.food is not None:
+            blocked.add(self.food)
+        if not exclude_bonus and self.bonus_food is not None:
+            blocked.add(self.bonus_food)
+
+        free_points = []
+        for x in range(0, self.w, BLOCK_SIZE):
+            for y in range(0, self.h, BLOCK_SIZE):
+                point = Point(x, y)
+                if point not in blocked:
+                    free_points.append(point)
+        return free_points
         
     def play_step(self, action):
         self.frame_iteration += 1
@@ -112,6 +128,9 @@ class SnakeGameAI:
                 quit()
             
     def _get_closest_food_dist(self):
+        if self.food is None:
+            return 0
+
         dist_normal = abs(self.head.x - self.food.x) + abs(self.head.y - self.food.y)
         if self.bonus_food:
             dist_bonus = abs(self.head.x - self.bonus_food.x) + abs(self.head.y - self.bonus_food.y)
@@ -187,6 +206,8 @@ class SnakeGameAI:
             reward = 10  # Eat Food reward
             self.frame_iteration = 0
             self._place_food()
+            if self.food is None:
+                game_over = True
         # Bonus Food
         elif self.bonus_food is not None and self.head == self.bonus_food:
             self.score += 5

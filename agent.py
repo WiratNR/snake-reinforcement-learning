@@ -207,6 +207,201 @@ class Agent:
                      queue.append((nx, ny))
         return count
 
+    def _point_to_cell(self, point):
+        return (int(point.x // BLOCK_SIZE), int(point.y // BLOCK_SIZE))
+
+    def _cell_to_point(self, cell):
+        return Point(cell[0] * BLOCK_SIZE, cell[1] * BLOCK_SIZE)
+
+    def _board_cells(self, game):
+        return game.w // BLOCK_SIZE, game.h // BLOCK_SIZE
+
+    def _neighbor_cells(self, cell):
+        x, y = cell
+        return [
+            ((x + 1, y), Direction.RIGHT),
+            ((x, y + 1), Direction.DOWN),
+            ((x - 1, y), Direction.LEFT),
+            ((x, y - 1), Direction.UP),
+        ]
+
+    def _is_cell_inside(self, cell, game):
+        cols, rows = self._board_cells(game)
+        return 0 <= cell[0] < cols and 0 <= cell[1] < rows
+
+    def _obstacle_cells(self, game):
+        return {self._point_to_cell(point) for point in game.obstacles}
+
+    def _bfs_cells(self, game, start, target, blocked_cells):
+        if start == target:
+            return [start]
+
+        queue = deque([(start, [start])])
+        visited = {start}
+        obstacles = self._obstacle_cells(game)
+
+        while queue:
+            cell, path = queue.popleft()
+            for next_cell, _ in self._neighbor_cells(cell):
+                if next_cell in visited:
+                    continue
+                if not self._is_cell_inside(next_cell, game):
+                    continue
+                if next_cell in obstacles:
+                    continue
+                if next_cell in blocked_cells and next_cell != target:
+                    continue
+
+                next_path = path + [next_cell]
+                if next_cell == target:
+                    return next_path
+
+                visited.add(next_cell)
+                queue.append((next_cell, next_path))
+
+        return None
+
+    def _simulate_snake_path(self, game, path):
+        snake = [self._point_to_cell(point) for point in game.snake]
+        targets = {self._point_to_cell(game.food)}
+        if game.bonus_food is not None:
+            targets.add(self._point_to_cell(game.bonus_food))
+
+        for cell in path[1:]:
+            grows = cell in targets
+            blocked = set(snake if grows else snake[:-1])
+            if cell in blocked:
+                return None
+            snake.insert(0, cell)
+            if not grows:
+                snake.pop()
+
+        return snake
+
+    def _can_reach_tail_after_path(self, game, path):
+        simulated_snake = self._simulate_snake_path(game, path)
+        if not simulated_snake:
+            return False
+
+        head = simulated_snake[0]
+        tail = simulated_snake[-1]
+        blocked = set(simulated_snake[:-1])
+        return self._bfs_cells(game, head, tail, blocked) is not None
+
+    def _path_to_relative_move(self, game, path):
+        if not path or len(path) < 2:
+            return None
+
+        current = path[0]
+        next_cell = path[1]
+        dx = next_cell[0] - current[0]
+        dy = next_cell[1] - current[1]
+        if dx == 1:
+            direction = Direction.RIGHT
+        elif dx == -1:
+            direction = Direction.LEFT
+        elif dy == 1:
+            direction = Direction.DOWN
+        elif dy == -1:
+            direction = Direction.UP
+        else:
+            return None
+
+        if game.is_collision(self._cell_to_point(next_cell)):
+            return None
+
+        return self._direction_to_relative_move(direction, game)
+
+    def _safe_target_paths(self, game):
+        head = self._point_to_cell(game.head)
+        snake = [self._point_to_cell(point) for point in game.snake]
+        blocked = set(snake[:-1])
+
+        targets = [(self._point_to_cell(game.food), 1)]
+        if game.bonus_food is not None and game.bonus_timer > 0:
+            targets.append((self._point_to_cell(game.bonus_food), 5))
+
+        candidates = []
+        for target, value in targets:
+            path = self._bfs_cells(game, head, target, blocked)
+            if path is None or len(path) < 2:
+                continue
+            if target != self._point_to_cell(game.food) and len(path) - 1 > game.bonus_timer:
+                continue
+            if not self._can_reach_tail_after_path(game, path):
+                continue
+
+            score_per_step = value / max(1, len(path) - 1)
+            candidates.append((-score_per_step, len(path), -value, path))
+
+        return [candidate[-1] for candidate in sorted(candidates)]
+
+    def _get_tail_chase_action(self, game):
+        head = self._point_to_cell(game.head)
+        snake = [self._point_to_cell(point) for point in game.snake]
+        tail = snake[-1]
+        blocked = set(snake[:-1])
+        path = self._bfs_cells(game, head, tail, blocked)
+        return self._path_to_relative_move(game, path)
+
+    def _get_space_maximizing_action(self, game):
+        head = self._point_to_cell(game.head)
+        snake = [self._point_to_cell(point) for point in game.snake]
+        blocked_base = set(snake[:-1])
+        candidates = []
+
+        for next_cell, direction in self._neighbor_cells(head):
+            if not self._is_cell_inside(next_cell, game):
+                continue
+            if game.is_collision(self._cell_to_point(next_cell)):
+                continue
+            if next_cell in self._obstacle_cells(game):
+                continue
+            if next_cell in blocked_base:
+                continue
+
+            area = 0
+            queue = deque([next_cell])
+            visited = {next_cell}
+            while queue:
+                cell = queue.popleft()
+                area += 1
+                for neighbor, _ in self._neighbor_cells(cell):
+                    if neighbor in visited:
+                        continue
+                    if not self._is_cell_inside(neighbor, game):
+                        continue
+                    if neighbor in self._obstacle_cells(game) or neighbor in blocked_base:
+                        continue
+                    visited.add(neighbor)
+                    queue.append(neighbor)
+
+            target_dist = abs(next_cell[0] - self._point_to_cell(game.food)[0]) + abs(next_cell[1] - self._point_to_cell(game.food)[1])
+            candidates.append((-area, target_dist, direction.value, direction))
+
+        if not candidates:
+            return None
+
+        direction = min(candidates)[3]
+        return self._direction_to_relative_move(direction, game)
+
+    def _get_survival_planned_action(self, game):
+        for path in self._safe_target_paths(game):
+            move = self._path_to_relative_move(game, path)
+            if move is not None:
+                return move
+
+        tail_move = self._get_tail_chase_action(game)
+        if tail_move is not None:
+            return tail_move
+
+        if game.current_level == 'empty' and not game.obstacles:
+            cycle_move = self._get_hamiltonian_action(game)
+            if cycle_move is not None:
+                return cycle_move
+
+        return self._get_space_maximizing_action(game)
+
     def _get_greedy_safe_action(self, game):
         clock_wise = [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
         idx = clock_wise.index(game.direction)
@@ -342,14 +537,90 @@ class Agent:
 
         return self._direction_to_relative_move(next_dir, game)
 
+    def _cycle_distance(self, start_idx, end_idx, route_len):
+        return (end_idx - start_idx) % route_len
+
+    def _get_hamiltonian_smart_action(self, game):
+        if game.current_level != 'empty' or game.obstacles:
+            return None
+
+        route = self._hamiltonian_cycle_route(game)
+        index_by_cell = self._cycle_index_cache.get((game.w, game.h), {})
+        if not route or not index_by_cell:
+            return None
+
+        route_len = len(route)
+        head_cell = self._point_to_cell(game.head)
+        tail_cell = self._point_to_cell(game.snake[-1])
+        head_idx = index_by_cell.get(head_cell)
+        tail_idx = index_by_cell.get(tail_cell)
+        if head_idx is None or tail_idx is None:
+            return None
+
+        tail_distance = self._cycle_distance(head_idx, tail_idx, route_len)
+        if tail_distance == 0:
+            tail_distance = route_len
+
+        target_options = [(self._point_to_cell(game.food), 1)]
+        if game.bonus_food is not None and game.bonus_timer > 0:
+            target_options.append((self._point_to_cell(game.bonus_food), 5))
+
+        best_target = None
+        best_target_rank = None
+        for target_cell, value in target_options:
+            target_idx = index_by_cell.get(target_cell)
+            if target_idx is None:
+                continue
+            target_distance = self._cycle_distance(head_idx, target_idx, route_len)
+            if target_distance <= 0 or target_distance >= tail_distance - 2:
+                continue
+            if value > 1 and target_distance > game.bonus_timer:
+                continue
+
+            rank = (-(value / max(1, target_distance)), target_distance)
+            if best_target_rank is None or rank < best_target_rank:
+                best_target_rank = rank
+                best_target = target_idx
+
+        candidates = []
+        for next_cell, direction in self._neighbor_cells(head_cell):
+            move = self._direction_to_relative_move(direction, game)
+            if move is None:
+                continue
+            if not self._is_cell_inside(next_cell, game):
+                continue
+            if game.is_collision(self._cell_to_point(next_cell)):
+                continue
+
+            next_idx = index_by_cell.get(next_cell)
+            if next_idx is None:
+                continue
+            progress = self._cycle_distance(head_idx, next_idx, route_len)
+            if progress <= 0 or progress >= tail_distance - 2:
+                continue
+
+            if best_target is not None:
+                target_distance = self._cycle_distance(next_idx, best_target, route_len)
+            else:
+                target_distance = route_len
+
+            candidates.append((target_distance, progress, direction.value, move))
+
+        if candidates:
+            return min(candidates)[3]
+
+        return self._get_hamiltonian_action(game)
+
     def get_action(self, state, game):
         # Update Loop Monitor
         self.loop_monitor.update(game.head, game.score)
 
         if self.force_cycle_mode:
-            cycle_move = self._get_hamiltonian_action(game)
-            if cycle_move is not None:
-                return cycle_move
+            planned_move = self._get_hamiltonian_smart_action(game)
+            if planned_move is None:
+                planned_move = self._get_survival_planned_action(game)
+            if planned_move is not None:
+                return planned_move
         
         # random moves: tradeoff exploration / exploitation
         # CRITICAL FIX: MUCH faster epsilon decay
@@ -358,9 +629,11 @@ class Agent:
         
         final_move = [0,0,0]
         if self.n_games > 900:
-            greedy_move = self._get_greedy_safe_action(game)
-            if greedy_move is not None:
-                return greedy_move
+            planned_move = self._get_hamiltonian_smart_action(game)
+            if planned_move is None:
+                planned_move = self._get_survival_planned_action(game)
+            if planned_move is not None:
+                return planned_move
 
         if random.randint(0, 200) < self.epsilon:
             move = random.randint(0, 2)
