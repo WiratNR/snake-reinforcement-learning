@@ -187,7 +187,7 @@ class SnakeGameAI:
             self._place_food()
         # Bonus Food
         elif self.bonus_food is not None and self.head == self.bonus_food:
-            self.score += 3
+            self.score += 4
             reward = 20  # INCREASED: Better bonus reward
             self.bonus_food = None
         else:
