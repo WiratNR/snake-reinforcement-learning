@@ -99,7 +99,7 @@ class SnakeGameAI:
         x = random.randint(0, (self.w-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE 
         y = random.randint(0, (self.h-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE
         self.bonus_food = Point(x, y)
-        self.bonus_timer = 100 # Bonus lasts long enough for planned routes
+        self.bonus_timer = 150 # Bonus lasts long enough for planned routes
         if self.bonus_food in self.snake or self.bonus_food in self.obstacles or self.bonus_food == self.food:
             self._place_bonus_food()
         
