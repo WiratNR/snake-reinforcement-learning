@@ -17,3 +17,4 @@ env/
 model/
 stats.txt
 *.log
+self_learning_metrics.json

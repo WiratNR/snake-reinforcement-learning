@@ -116,7 +116,7 @@ class QTrainer:
         # 1: predicted Q values with current state
         pred = self.model(state)
 
-        target = pred.clone()
+        target = pred.clone().detach()
         for idx in range(len(done)):
             Q_new = reward[idx]
             if not done[idx]:
@@ -146,4 +146,3 @@ class QTrainer:
 
         self.optimizer.step()
         return loss.item()
-

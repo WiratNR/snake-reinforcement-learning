@@ -4,6 +4,11 @@ import numpy as np
 from collections import deque
 import os
 import json
+import argparse
+import time
+
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
 from game import SnakeGameAI, Direction, Point, BLOCK_SIZE
 from levels import LevelManager
 from model import DuelingLinearQNet, QTrainer
@@ -15,6 +20,7 @@ LR = 0.0001  # REDUCED: Lower learning rate for better convergence and lower los
 MODEL_FOOD_PROGRESS_BONUS = 0.20
 MODEL_SPACE_BONUS = 0.20
 STALL_FRAME_LIMIT = 300
+SELF_LEARN_METRICS_FILE = 'self_learning_metrics.json'
 
 class LoopMonitor:
     def __init__(self, history_len=100, threshold=4):
@@ -54,6 +60,7 @@ class Agent:
         self.memory = deque(maxlen=MAX_MEMORY) # popleft()
         self.loop_monitor = LoopMonitor()
         self.force_cycle_mode = False
+        self.use_high_level_planners = True
         self._cycle_route_cache = {}
         self._cycle_index_cache = {}
         
@@ -584,6 +591,16 @@ class Agent:
 
         return max(candidates)[1]
 
+    def _predict_q_values(self, state):
+        was_training = self.model.training
+        self.model.eval()
+        state0 = torch.tensor(np.array(state), dtype=torch.float).unsqueeze(0)
+        with torch.no_grad():
+            prediction = self.model(state0)[0]
+        if was_training:
+            self.model.train()
+        return prediction
+
     def _hamiltonian_cycle_route(self, game):
         cache_key = (game.w, game.h)
         if cache_key in self._cycle_route_cache:
@@ -721,7 +738,7 @@ class Agent:
         # Update Loop Monitor
         self.loop_monitor.update(game.head, game.score)
 
-        if self.force_cycle_mode:
+        if self.force_cycle_mode and self.use_high_level_planners:
             planned_move = self._get_hamiltonian_smart_action(game)
             if planned_move is None:
                 planned_move = self._get_survival_planned_action(game)
@@ -734,7 +751,7 @@ class Agent:
         self.epsilon = 80 * np.exp(-0.02 * self.n_games)
         
         final_move = [0,0,0]
-        if self.n_games > 900:
+        if self.use_high_level_planners and self.n_games > 900:
             planned_move = self._get_hamiltonian_smart_action(game)
             if planned_move is None:
                 planned_move = self._get_survival_planned_action(game)
@@ -745,9 +762,7 @@ class Agent:
             move = random.randint(0, 2)
             final_move[move] = 1
         else:
-            state0 = torch.tensor(np.array(state), dtype=torch.float).unsqueeze(0)
-            with torch.no_grad():
-                prediction = self.model(state0)[0]
+            prediction = self._predict_q_values(state)
             move = self._choose_model_move(prediction, game)
             final_move[move] = 1
 
@@ -793,9 +808,7 @@ class Agent:
                 # Override only if there are safe alternatives
                 if safe_moves:
                     # Pick safe move with highest Q-value
-                    state0 = torch.tensor(np.array(state), dtype=torch.float).unsqueeze(0)
-                    with torch.no_grad():
-                        q_values = self.model(state0)[0]
+                    q_values = self._predict_q_values(state)
                     
                     # Choose best safe move
                     best_safe_move = max(safe_moves, key=lambda m: q_values[m].item())
@@ -803,6 +816,214 @@ class Agent:
                     final_move[best_safe_move] = 1
 
         return final_move
+
+
+def evaluate_model_only(games=25, level='random', width=640, height=480, seed=20260521, agent=None):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if agent is None:
+        agent = Agent()
+
+    previous_n_games = agent.n_games
+    previous_force_cycle = agent.force_cycle_mode
+    previous_planner_setting = agent.use_high_level_planners
+    previous_training = agent.model.training
+
+    agent.n_games = 1000
+    agent.force_cycle_mode = False
+    agent.use_high_level_planners = False
+    agent.model.eval()
+
+    game = SnakeGameAI(w=width, h=height, render=False)
+
+    scores = []
+    steps = []
+    with torch.no_grad():
+        for game_idx in range(games):
+            game_seed = seed + game_idx
+            random.seed(game_seed)
+            np.random.seed(game_seed)
+            torch.manual_seed(game_seed)
+            game.set_level(level)
+            step_count = 0
+
+            while True:
+                state = agent.get_state(game)
+                move = agent.get_action(state, game)
+                _, done, score = game.play_step(move)
+                step_count += 1
+
+                if done:
+                    scores.append(score)
+                    steps.append(step_count)
+                    agent.loop_monitor.clear()
+                    break
+
+    result = {
+        "model_only_mean_score": round(float(np.mean(scores)), 4),
+        "model_only_max_score": int(max(scores)),
+        "model_only_median_score": round(float(np.median(scores)), 4),
+        "scores": scores,
+        "mean_steps": round(float(np.mean(steps)), 4),
+        "games": len(scores),
+        "level": level,
+        "board": [width, height],
+        "planner": "disabled_safety_only",
+    }
+
+    agent.n_games = previous_n_games
+    agent.force_cycle_mode = previous_force_cycle
+    agent.use_high_level_planners = previous_planner_setting
+    if previous_training:
+        agent.model.train()
+    else:
+        agent.model.eval()
+
+    return result
+
+
+def _self_learning_reward(agent, game, env_reward, done, dist_before, score_before):
+    if done:
+        return -25.0
+
+    reward = float(env_reward)
+    dist_after = game._get_closest_food_dist()
+    distance_delta = (dist_before - dist_after) / BLOCK_SIZE
+    reward += 0.35 * distance_delta
+
+    if game.score > score_before:
+        reward += 5.0
+    else:
+        head_cell = agent._point_to_cell(game.head)
+        snake = [agent._point_to_cell(point) for point in game.snake]
+        blocked = set(snake[:-1]) | agent._obstacle_cells(game)
+        area = agent._reachable_cells_from(game, head_cell, blocked)
+        area_target = max(1, len(game.snake) * 2)
+        area_score = min(1.0, area / area_target)
+        reward += 0.25 * area_score
+        if area < len(game.snake):
+            reward -= 1.5
+
+    return reward
+
+
+def self_learn(
+    episodes=200,
+    eval_games=25,
+    eval_interval=25,
+    level='random',
+    width=640,
+    height=480,
+    seed=20260521,
+    save_eval_games=25,
+    min_improvement=1.0,
+):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    agent = Agent()
+    agent.use_high_level_planners = False
+    agent.force_cycle_mode = False
+    agent.n_games = 0
+    agent.model.train()
+
+    game = SnakeGameAI(w=width, h=height, render=False)
+    game.set_level(level)
+
+    save_eval_games = max(eval_games, save_eval_games)
+    best_eval = evaluate_model_only(
+        games=save_eval_games,
+        level=level,
+        width=width,
+        height=height,
+        seed=seed,
+        agent=agent,
+    )
+    best_mean = best_eval["model_only_mean_score"]
+    best_max = best_eval["model_only_max_score"]
+    print(json.dumps({"event": "initial_eval", **best_eval}, ensure_ascii=False), flush=True)
+
+    start_time = time.time()
+    scores_window = deque(maxlen=50)
+    losses_window = deque(maxlen=50)
+
+    for episode in range(1, episodes + 1):
+        while True:
+            state_old = agent.get_state(game)
+            dist_before = game._get_closest_food_dist()
+            score_before = game.score
+            final_move = agent.get_action(state_old, game)
+            env_reward, done, score = game.play_step(final_move)
+            state_new = agent.get_state(game)
+            reward = _self_learning_reward(agent, game, env_reward, done, dist_before, score_before)
+
+            loss = agent.train_short_memory(state_old, final_move, reward, state_new, done)
+            agent.remember(state_old, final_move, reward, state_new, done)
+            losses_window.append(loss)
+
+            if done:
+                game.reset()
+                agent.n_games += 1
+                agent.train_long_memory()
+                agent.loop_monitor.clear()
+                scores_window.append(score)
+                break
+
+        if episode % eval_interval == 0 or episode == episodes:
+            eval_result = evaluate_model_only(
+                games=eval_games,
+                level=level,
+                width=width,
+                height=height,
+                seed=seed,
+                agent=agent,
+            )
+            save_eval_result = eval_result
+            if eval_games < save_eval_games:
+                save_eval_result = evaluate_model_only(
+                    games=save_eval_games,
+                    level=level,
+                    width=width,
+                    height=height,
+                    seed=seed,
+                    agent=agent,
+                )
+
+            improved = (
+                save_eval_result["model_only_mean_score"] >= best_mean + min_improvement
+                or (
+                    save_eval_result["model_only_mean_score"] >= best_mean
+                    and save_eval_result["model_only_max_score"] > best_max
+                )
+            )
+            if improved:
+                best_mean = save_eval_result["model_only_mean_score"]
+                best_max = save_eval_result["model_only_max_score"]
+                agent.model.save()
+
+            report = {
+                "event": "self_learn_eval",
+                "episode": episode,
+                "train_recent_mean": round(float(np.mean(scores_window)), 4) if scores_window else 0.0,
+                "recent_loss": round(float(np.mean(losses_window)), 6) if losses_window else 0.0,
+                "saved": improved,
+                "best_mean": best_mean,
+                "best_max": best_max,
+                "elapsed_sec": round(time.time() - start_time, 2),
+                **eval_result,
+            }
+            if save_eval_result is not eval_result:
+                report["save_eval_mean_score"] = save_eval_result["model_only_mean_score"]
+                report["save_eval_max_score"] = save_eval_result["model_only_max_score"]
+            with open(SELF_LEARN_METRICS_FILE, "a") as f:
+                f.write(json.dumps(report, ensure_ascii=False) + "\n")
+            print(json.dumps(report, ensure_ascii=False), flush=True)
+            agent.model.train()
+
+    return {"best_mean": best_mean, "best_max": best_max}
 
 
 def train(target_level=None):
@@ -1011,9 +1232,49 @@ def target500(target_score=500, render=False, seed=1, max_steps=200000):
 if __name__ == '__main__':
     # Default to train, but allows simple toggle or CLI later
     import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == 'model_eval':
+        parser = argparse.ArgumentParser(description='Measure model-only Snake performance.')
+        parser.add_argument('--games', type=int, default=25)
+        parser.add_argument('--level', default='random', choices=LevelManager.LEVELS)
+        parser.add_argument('--width', type=int, default=640)
+        parser.add_argument('--height', type=int, default=480)
+        parser.add_argument('--seed', type=int, default=20260521)
+        args = parser.parse_args(sys.argv[2:])
+        print(json.dumps(evaluate_model_only(
+            games=args.games,
+            level=args.level,
+            width=args.width,
+            height=args.height,
+            seed=args.seed,
+        ), ensure_ascii=False))
+
+    elif len(sys.argv) > 1 and sys.argv[1] == 'selflearn':
+        parser = argparse.ArgumentParser(description='Train the model from self-play with high-level planners disabled.')
+        parser.add_argument('--episodes', type=int, default=200)
+        parser.add_argument('--eval-games', type=int, default=25)
+        parser.add_argument('--eval-interval', type=int, default=25)
+        parser.add_argument('--level', default='random', choices=LevelManager.LEVELS)
+        parser.add_argument('--width', type=int, default=640)
+        parser.add_argument('--height', type=int, default=480)
+        parser.add_argument('--seed', type=int, default=20260521)
+        parser.add_argument('--save-eval-games', type=int, default=25)
+        parser.add_argument('--min-improvement', type=float, default=1.0)
+        args = parser.parse_args(sys.argv[2:])
+        print(json.dumps(self_learn(
+            episodes=args.episodes,
+            eval_games=args.eval_games,
+            eval_interval=args.eval_interval,
+            level=args.level,
+            width=args.width,
+            height=args.height,
+            seed=args.seed,
+            save_eval_games=args.save_eval_games,
+            min_improvement=args.min_improvement,
+        ), ensure_ascii=False))
     
     # Check for parallel training mode
-    if '--parallel' in sys.argv:
+    elif '--parallel' in sys.argv:
         from parallel_trainer import ParallelTrainer
         
         num_workers = None
