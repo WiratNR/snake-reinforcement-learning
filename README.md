@@ -4,6 +4,32 @@
 
 ---
 
+## ผลล่าสุด
+
+เวอร์ชันนี้ปรับให้ agent เล่นฉลาดขึ้นในช่วงใช้งานโมเดลที่เทรนแล้ว โดยเพิ่มการวางแผนเส้นทางแบบ BFS สำหรับการเดินไปหาอาหาร/bonus food และคุมการไล่ bonus ไม่ให้เดินอ้อมเกินไป
+
+ผล deterministic headless evaluation:
+
+| ชุดทดสอบ | เกม | Mean score | Median | Max | Mean steps | Zero score | Short game |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Baseline ก่อนปรับ | 25 | 36.44 | 40.0 | 84 | 624.32 | 20% | 20% |
+| Final verification | 25 | 207.92 | 212.0 | 328 | 2430.64 | 0% | 0% |
+| Long stability check | 100 | 178.29 | 179.5 | 336 | 2038.74 | 0% | 0% |
+
+คำสั่งตรวจผลซ้ำ:
+
+```bash
+PYGAME_HIDE_SUPPORT_PROMPT=1 venv/bin/python autoresearch-results/verify_snake_metrics.py
+```
+
+คำสั่งตรวจ syntax:
+
+```bash
+venv/bin/python -m py_compile agent.py game.py model.py levels.py parallel_trainer.py diagnose.py debug_learning.py test_learning.py
+```
+
+---
+
 ## ⚡ ติดตั้งแบบเร็ว (Quick Setup)
 
 ### macOS
@@ -123,7 +149,7 @@ pip install pygame
 
 ---
 
-## � ความต้องการ
+## ความต้องการ
 
 - **Python** 3.8+
 - **RAM** 4GB+ (แนะนำ 8GB)
