@@ -6,8 +6,10 @@ import os
 import json
 import argparse
 import time
+import copy
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+os.environ.setdefault("MPLCONFIGDIR", "/private/tmp/snake-rl-matplotlib")
 
 from game import SnakeGameAI, Direction, Point, BLOCK_SIZE
 from levels import LevelManager
@@ -61,6 +63,7 @@ class Agent:
         self.loop_monitor = LoopMonitor()
         self.force_cycle_mode = False
         self.use_high_level_planners = True
+        self.exploration_epsilon_override = None
         self._cycle_route_cache = {}
         self._cycle_index_cache = {}
         
@@ -749,6 +752,8 @@ class Agent:
         # CRITICAL FIX: MUCH faster epsilon decay
         # At game 50, epsilon ~ 15. At game 100, epsilon ~ 3. At game 200, epsilon ~ 0.1
         self.epsilon = 80 * np.exp(-0.02 * self.n_games)
+        if self.exploration_epsilon_override is not None:
+            self.epsilon = self.exploration_epsilon_override
         
         final_move = [0,0,0]
         if self.use_high_level_planners and self.n_games > 900:
@@ -830,10 +835,12 @@ def evaluate_model_only(games=25, level='random', width=640, height=480, seed=20
     previous_force_cycle = agent.force_cycle_mode
     previous_planner_setting = agent.use_high_level_planners
     previous_training = agent.model.training
+    previous_epsilon_override = agent.exploration_epsilon_override
 
     agent.n_games = 1000
     agent.force_cycle_mode = False
     agent.use_high_level_planners = False
+    agent.exploration_epsilon_override = 0.0
     agent.model.eval()
 
     game = SnakeGameAI(w=width, h=height, render=False)
@@ -876,6 +883,7 @@ def evaluate_model_only(games=25, level='random', width=640, height=480, seed=20
     agent.n_games = previous_n_games
     agent.force_cycle_mode = previous_force_cycle
     agent.use_high_level_planners = previous_planner_setting
+    agent.exploration_epsilon_override = previous_epsilon_override
     if previous_training:
         agent.model.train()
     else:
@@ -919,6 +927,9 @@ def self_learn(
     seed=20260521,
     save_eval_games=25,
     min_improvement=1.0,
+    restore_patience=2,
+    min_exploration=6.0,
+    exploration_decay=0.006,
 ):
     random.seed(seed)
     np.random.seed(seed)
@@ -944,6 +955,8 @@ def self_learn(
     )
     best_mean = best_eval["model_only_mean_score"]
     best_max = best_eval["model_only_max_score"]
+    best_state = copy.deepcopy(agent.model.state_dict())
+    failed_evals = 0
     print(json.dumps({"event": "initial_eval", **best_eval}, ensure_ascii=False), flush=True)
 
     start_time = time.time()
@@ -951,6 +964,10 @@ def self_learn(
     losses_window = deque(maxlen=50)
 
     for episode in range(1, episodes + 1):
+        agent.exploration_epsilon_override = max(
+            min_exploration,
+            80 * np.exp(-exploration_decay * episode),
+        )
         while True:
             state_old = agent.get_state(game)
             dist_before = game._get_closest_food_dist()
@@ -1002,7 +1019,20 @@ def self_learn(
             if improved:
                 best_mean = save_eval_result["model_only_mean_score"]
                 best_max = save_eval_result["model_only_max_score"]
+                best_state = copy.deepcopy(agent.model.state_dict())
+                failed_evals = 0
                 agent.model.save()
+                restored = False
+            else:
+                failed_evals += 1
+                restored = failed_evals >= restore_patience
+                if restored:
+                    agent.model.load_state_dict(best_state)
+                    agent.target_model.load_state_dict(best_state)
+                    agent.trainer = QTrainer(agent.model, lr=LR, gamma=agent.gamma)
+                    agent.memory.clear()
+                    agent.loop_monitor.clear()
+                    failed_evals = 0
 
             report = {
                 "event": "self_learn_eval",
@@ -1010,8 +1040,10 @@ def self_learn(
                 "train_recent_mean": round(float(np.mean(scores_window)), 4) if scores_window else 0.0,
                 "recent_loss": round(float(np.mean(losses_window)), 6) if losses_window else 0.0,
                 "saved": improved,
+                "restored_best": restored,
                 "best_mean": best_mean,
                 "best_max": best_max,
+                "exploration_epsilon": round(float(agent.exploration_epsilon_override), 4),
                 "elapsed_sec": round(time.time() - start_time, 2),
                 **eval_result,
             }
@@ -1260,6 +1292,9 @@ if __name__ == '__main__':
         parser.add_argument('--seed', type=int, default=20260521)
         parser.add_argument('--save-eval-games', type=int, default=25)
         parser.add_argument('--min-improvement', type=float, default=1.0)
+        parser.add_argument('--restore-patience', type=int, default=2)
+        parser.add_argument('--min-exploration', type=float, default=6.0)
+        parser.add_argument('--exploration-decay', type=float, default=0.006)
         args = parser.parse_args(sys.argv[2:])
         print(json.dumps(self_learn(
             episodes=args.episodes,
@@ -1271,6 +1306,9 @@ if __name__ == '__main__':
             seed=args.seed,
             save_eval_games=args.save_eval_games,
             min_improvement=args.min_improvement,
+            restore_patience=args.restore_patience,
+            min_exploration=args.min_exploration,
+            exploration_decay=args.exploration_decay,
         ), ensure_ascii=False))
     
     # Check for parallel training mode
