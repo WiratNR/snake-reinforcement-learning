@@ -1181,8 +1181,15 @@ def policy_search(
     print(json.dumps({"event": "policy_initial", "weights": best_weights, **best_result}, ensure_ascii=False), flush=True)
 
     for iteration in range(1, iterations + 1):
-        scale = max(0.03, 0.35 * (1.0 - (iteration - 1) / max(1, iterations)))
-        if iteration % 10 == 0:
+        if best_mean >= 250:
+            starting_scale = 0.12
+        elif best_mean >= 180:
+            starting_scale = 0.20
+        else:
+            starting_scale = 0.35
+        scale = max(0.015, starting_scale * (1.0 - (iteration - 1) / max(1, iterations)))
+        use_global_probe = best_mean < 220 and iteration % 10 == 0
+        if use_global_probe:
             candidate_weights = {
                 key: float(rng.uniform(*bounds))
                 for key, bounds in {
@@ -1212,8 +1219,9 @@ def policy_search(
         )
         validate_result = None
         accepted = False
+        quick_validate_margin = 20 if best_mean >= 220 else 5
         if (
-            quick_result["model_only_mean_score"] >= best_mean - 5
+            quick_result["model_only_mean_score"] >= best_mean - quick_validate_margin
             or quick_result["model_only_max_score"] > best_max
         ):
             validate_result = evaluate_model_only(
