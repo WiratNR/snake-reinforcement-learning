@@ -13,6 +13,7 @@ MAX_MEMORY = 100_000
 BATCH_SIZE = 4000  # INCREASED: Larger batch for more stable gradients
 LR = 0.0001  # REDUCED: Lower learning rate for better convergence and lower loss
 MODEL_FOOD_PROGRESS_BONUS = 0.12
+STALL_FRAME_LIMIT = 300
 
 class LoopMonitor:
     def __init__(self, history_len=100, threshold=4):
@@ -289,6 +290,25 @@ class Agent:
         blocked = set(simulated_snake[:-1])
         return self._bfs_cells(game, head, tail, blocked) is not None
 
+    def _reachable_cells_from(self, game, start, blocked_cells):
+        queue = deque([start])
+        visited = {start}
+        obstacles = self._obstacle_cells(game)
+
+        while queue:
+            cell = queue.popleft()
+            for next_cell, _ in self._neighbor_cells(cell):
+                if next_cell in visited:
+                    continue
+                if not self._is_cell_inside(next_cell, game):
+                    continue
+                if next_cell in obstacles or next_cell in blocked_cells:
+                    continue
+                visited.add(next_cell)
+                queue.append(next_cell)
+
+        return len(visited)
+
     def _path_to_relative_move(self, game, path):
         if not path or len(path) < 2:
             return None
@@ -386,11 +406,38 @@ class Agent:
         direction = min(candidates)[3]
         return self._direction_to_relative_move(direction, game)
 
+    def _get_stall_break_action(self, game):
+        if game.frame_iteration < max(STALL_FRAME_LIMIT, len(game.snake) * 2):
+            return None
+
+        head = self._point_to_cell(game.head)
+        snake = [self._point_to_cell(point) for point in game.snake]
+        target = self._point_to_cell(game.food)
+        path = self._bfs_cells(game, head, target, set(snake[:-1]))
+        if path is None or len(path) < 2:
+            return None
+
+        simulated_snake = self._simulate_snake_path(game, path)
+        if simulated_snake is None:
+            return None
+
+        blocked = set(simulated_snake)
+        open_area = self._reachable_cells_from(game, simulated_snake[0], blocked - {simulated_snake[0]})
+        min_escape_area = max(20, len(simulated_snake) // 3)
+        if open_area < min_escape_area:
+            return None
+
+        return self._path_to_relative_move(game, path)
+
     def _get_survival_planned_action(self, game):
         for path in self._safe_target_paths(game):
             move = self._path_to_relative_move(game, path)
             if move is not None:
                 return move
+
+        stall_move = self._get_stall_break_action(game)
+        if stall_move is not None:
+            return stall_move
 
         tail_move = self._get_tail_chase_action(game)
         if tail_move is not None:
