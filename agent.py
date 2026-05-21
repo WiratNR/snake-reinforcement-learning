@@ -12,7 +12,7 @@ from helper import plot
 MAX_MEMORY = 100_000
 BATCH_SIZE = 4000  # INCREASED: Larger batch for more stable gradients
 LR = 0.0001  # REDUCED: Lower learning rate for better convergence and lower loss
-MODEL_FOOD_PROGRESS_BONUS = 0.1
+MODEL_FOOD_PROGRESS_BONUS = 0.12
 
 class LoopMonitor:
     def __init__(self, history_len=100, threshold=4):
