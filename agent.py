@@ -213,13 +213,6 @@ class Agent:
             clock_wise[(idx - 1) % 4]
         ]
 
-        target = game.food
-        if game.bonus_food:
-            normal_dist = abs(game.head.x - game.food.x) + abs(game.head.y - game.food.y)
-            bonus_dist = abs(game.head.x - game.bonus_food.x) + abs(game.head.y - game.bonus_food.y)
-            if bonus_dist <= normal_dist * 5.5:
-                target = game.bonus_food
-
         def next_point(point, direction):
             test_x, test_y = point.x, point.y
             if direction == Direction.RIGHT: test_x += 20
@@ -228,24 +221,36 @@ class Agent:
             elif direction == Direction.UP: test_y -= 20
             return Point(test_x, test_y)
 
-        queue = deque([(game.head, [])])
-        visited = {game.head}
-        while queue:
-            point, path = queue.popleft()
-            if point == target and path:
-                for move_idx, direction in enumerate(next_dirs):
-                    if direction == path[0]:
-                        final_move = [0, 0, 0]
-                        final_move[move_idx] = 1
-                        return final_move
-                break
+        def first_step_to(target):
+            queue = deque([(game.head, [])])
+            visited = {game.head}
+            while queue:
+                point, path = queue.popleft()
+                if point == target and path:
+                    return path[0], len(path)
 
-            for direction in clock_wise:
-                point_next = next_point(point, direction)
-                if point_next in visited or game.is_collision(point_next):
-                    continue
-                visited.add(point_next)
-                queue.append((point_next, path + [direction]))
+                for direction in clock_wise:
+                    point_next = next_point(point, direction)
+                    if point_next in visited or game.is_collision(point_next):
+                        continue
+                    visited.add(point_next)
+                    queue.append((point_next, path + [direction]))
+            return None, None
+
+        target = game.food
+        best_direction, best_len = first_step_to(game.food)
+        if game.bonus_food:
+            bonus_direction, bonus_len = first_step_to(game.bonus_food)
+            if bonus_direction is not None and (best_direction is None or bonus_len <= best_len * 5.5):
+                target = game.bonus_food
+                best_direction = bonus_direction
+
+        if best_direction is not None:
+            for move_idx, direction in enumerate(next_dirs):
+                if direction == best_direction:
+                    final_move = [0, 0, 0]
+                    final_move[move_idx] = 1
+                    return final_move
 
         candidates = []
         for move_idx, direction in enumerate(next_dirs):
