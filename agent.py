@@ -204,6 +204,46 @@ class Agent:
                      queue.append((nx, ny))
         return count
 
+    def _get_greedy_safe_action(self, game):
+        clock_wise = [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
+        idx = clock_wise.index(game.direction)
+        next_dirs = [
+            clock_wise[idx],
+            clock_wise[(idx + 1) % 4],
+            clock_wise[(idx - 1) % 4]
+        ]
+
+        target = game.food
+        if game.bonus_food:
+            normal_dist = abs(game.head.x - game.food.x) + abs(game.head.y - game.food.y)
+            bonus_dist = abs(game.head.x - game.bonus_food.x) + abs(game.head.y - game.bonus_food.y)
+            if bonus_dist <= normal_dist:
+                target = game.bonus_food
+
+        candidates = []
+        for move_idx, direction in enumerate(next_dirs):
+            test_x, test_y = game.head.x, game.head.y
+            if direction == Direction.RIGHT: test_x += 20
+            elif direction == Direction.LEFT: test_x -= 20
+            elif direction == Direction.DOWN: test_y += 20
+            elif direction == Direction.UP: test_y -= 20
+
+            point = Point(test_x, test_y)
+            if game.is_collision(point):
+                continue
+
+            target_dist = abs(test_x - target.x) + abs(test_y - target.y)
+            wall_margin = min(test_x, game.w - 20 - test_x, test_y, game.h - 20 - test_y)
+            candidates.append((target_dist, -wall_margin, move_idx))
+
+        if not candidates:
+            return None
+
+        move = min(candidates)[2]
+        final_move = [0, 0, 0]
+        final_move[move] = 1
+        return final_move
+
     def get_action(self, state, game):
         # Update Loop Monitor
         self.loop_monitor.update(game.head, game.score)
@@ -214,6 +254,11 @@ class Agent:
         self.epsilon = 80 * np.exp(-0.02 * self.n_games)
         
         final_move = [0,0,0]
+        if self.n_games > 900:
+            greedy_move = self._get_greedy_safe_action(game)
+            if greedy_move is not None:
+                return greedy_move
+
         if random.randint(0, 200) < self.epsilon:
             move = random.randint(0, 2)
             final_move[move] = 1
