@@ -217,7 +217,7 @@ class Agent:
         if game.bonus_food:
             normal_dist = abs(game.head.x - game.food.x) + abs(game.head.y - game.food.y)
             bonus_dist = abs(game.head.x - game.bonus_food.x) + abs(game.head.y - game.bonus_food.y)
-            if bonus_dist <= normal_dist * 6:
+            if bonus_dist <= normal_dist * 5.5:
                 target = game.bonus_food
 
         def next_point(point, direction):
