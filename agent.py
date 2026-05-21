@@ -12,6 +12,7 @@ from helper import plot
 MAX_MEMORY = 100_000
 BATCH_SIZE = 4000  # INCREASED: Larger batch for more stable gradients
 LR = 0.0001  # REDUCED: Lower learning rate for better convergence and lower loss
+MODEL_FOOD_PROGRESS_BONUS = 0.1
 
 class LoopMonitor:
     def __init__(self, history_len=100, threshold=4):
@@ -478,6 +479,54 @@ class Agent:
         final_move[move_idx] = 1
         return final_move
 
+    def _next_point_for_direction(self, point, direction):
+        test_x, test_y = point.x, point.y
+        if direction == Direction.RIGHT:
+            test_x += BLOCK_SIZE
+        elif direction == Direction.LEFT:
+            test_x -= BLOCK_SIZE
+        elif direction == Direction.DOWN:
+            test_y += BLOCK_SIZE
+        elif direction == Direction.UP:
+            test_y -= BLOCK_SIZE
+        return Point(test_x, test_y)
+
+    def _model_target_food(self, game):
+        target = game.food
+        if game.bonus_food is not None:
+            normal_dist = abs(game.head.x - game.food.x) + abs(game.head.y - game.food.y)
+            bonus_dist = abs(game.head.x - game.bonus_food.x) + abs(game.head.y - game.bonus_food.y)
+            if bonus_dist <= normal_dist * 1.5:
+                target = game.bonus_food
+        return target
+
+    def _choose_model_move(self, q_values, game):
+        clock_wise = [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
+        idx = clock_wise.index(game.direction)
+        next_dirs = [
+            clock_wise[idx],
+            clock_wise[(idx + 1) % 4],
+            clock_wise[(idx - 1) % 4],
+        ]
+
+        target = self._model_target_food(game)
+        current_dist = abs(game.head.x - target.x) + abs(game.head.y - target.y)
+        candidates = []
+        for move_idx, direction in enumerate(next_dirs):
+            point = self._next_point_for_direction(game.head, direction)
+            if game.is_collision(point):
+                continue
+
+            next_dist = abs(point.x - target.x) + abs(point.y - target.y)
+            progress = (current_dist - next_dist) / BLOCK_SIZE
+            score = q_values[move_idx].item() + (MODEL_FOOD_PROGRESS_BONUS * progress)
+            candidates.append((score, move_idx))
+
+        if not candidates:
+            return torch.argmax(q_values).item()
+
+        return max(candidates)[1]
+
     def _hamiltonian_cycle_route(self, game):
         cache_key = (game.w, game.h)
         if cache_key in self._cycle_route_cache:
@@ -640,8 +689,9 @@ class Agent:
             final_move[move] = 1
         else:
             state0 = torch.tensor(np.array(state), dtype=torch.float).unsqueeze(0)
-            prediction = self.model(state0)
-            move = torch.argmax(prediction).item()
+            with torch.no_grad():
+                prediction = self.model(state0)[0]
+            move = self._choose_model_move(prediction, game)
             final_move[move] = 1
 
         # --- SIMPLIFIED Safety Override (Only prevent immediate death) ---
