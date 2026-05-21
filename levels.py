@@ -25,9 +25,9 @@ class LevelManager:
 
     @staticmethod
     def random_obstacles(w, h):
-        """Old logic: 1-3 random blocks"""
+        """Old logic: 0-2 random blocks"""
         obstacles = []
-        num_obstacles = random.randint(1, 3)
+        num_obstacles = random.randint(0, 2)
         for _ in range(num_obstacles):
             x = random.randint(0, (w-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE 
             y = random.randint(0, (h-BLOCK_SIZE )//BLOCK_SIZE )*BLOCK_SIZE
