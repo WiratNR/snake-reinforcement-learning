@@ -223,9 +223,9 @@ class Agent:
             move = torch.argmax(prediction).item()
             final_move[move] = 1
 
-        # --- SIMPLIFIED Safety Override (Only prevent immediate death) ---
-        # CRITICAL: Reduce override frequency to allow model to learn
-        # Only override if we're about to die AND we're not exploring (epsilon is low)
+        # --- Safety and late-game move reranking ---
+        # Keep the network as the primary policy, but for mature agents prefer
+        # safe moves that also make food progress and leave enough open space.
         use_safety = self.n_games > 50  # Start safety earlier
         
         if use_safety:
@@ -247,32 +247,57 @@ class Agent:
             elif proposed_dir == Direction.DOWN: cy += 20
             elif proposed_dir == Direction.UP: cy -= 20
             
-            # Only override if immediate death
-            if game.is_collision(Point(cx, cy)):
-                # Find safe moves (simple collision check only, no flood fill)
-                safe_moves = []
-                for i in range(3):
-                    check_dir = next_dirs[i]
-                    test_x, test_y = game.head.x, game.head.y
-                    if check_dir == Direction.RIGHT: test_x += 20
-                    elif check_dir == Direction.LEFT: test_x -= 20
-                    elif check_dir == Direction.DOWN: test_y += 20
-                    elif check_dir == Direction.UP: test_y -= 20
-                    
-                    if not game.is_collision(Point(test_x, test_y)):
-                        safe_moves.append(i)
+            safe_moves = []
+            move_points = {}
+            for i, check_dir in enumerate(next_dirs):
+                test_x, test_y = game.head.x, game.head.y
+                if check_dir == Direction.RIGHT: test_x += 20
+                elif check_dir == Direction.LEFT: test_x -= 20
+                elif check_dir == Direction.DOWN: test_y += 20
+                elif check_dir == Direction.UP: test_y -= 20
                 
-                # Override only if there are safe alternatives
-                if safe_moves:
-                    # Pick safe move with highest Q-value
-                    state0 = torch.tensor(np.array(state), dtype=torch.float).unsqueeze(0)
-                    with torch.no_grad():
-                        q_values = self.model(state0)[0]
-                    
-                    # Choose best safe move
+                point = Point(test_x, test_y)
+                move_points[i] = point
+                if not game.is_collision(point):
+                    safe_moves.append(i)
+            
+            if safe_moves:
+                state0 = torch.tensor(np.array(state), dtype=torch.float).unsqueeze(0)
+                with torch.no_grad():
+                    q_values = self.model(state0)[0]
+
+                if game.is_collision(Point(cx, cy)):
                     best_safe_move = max(safe_moves, key=lambda m: q_values[m].item())
                     final_move = [0, 0, 0]
                     final_move[best_safe_move] = 1
+                elif self.n_games > 200:
+                    target = game.food
+                    if game.bonus_food:
+                        food_dist = abs(game.head.x - game.food.x) + abs(game.head.y - game.food.y)
+                        bonus_dist = abs(game.head.x - game.bonus_food.x) + abs(game.head.y - game.bonus_food.y)
+                        if bonus_dist < food_dist:
+                            target = game.bonus_food
+
+                    current_dist = abs(game.head.x - target.x) + abs(game.head.y - target.y)
+                    safe_q = [q_values[m].item() for m in safe_moves]
+                    q_min, q_max = min(safe_q), max(safe_q)
+                    q_span = max(q_max - q_min, 1e-6)
+                    area_limit = max(len(game.snake) * 2, 1)
+
+                    def move_score(move_idx):
+                        point = move_points[move_idx]
+                        next_dist = abs(point.x - target.x) + abs(point.y - target.y)
+                        progress = (current_dist - next_dist) / 20.0
+                        q_norm = (q_values[move_idx].item() - q_min) / q_span
+                        area = min(self._get_reachable_area(game, point.x, point.y), area_limit)
+                        area_norm = area / area_limit
+                        trap_penalty = 1.0 if area < len(game.snake) else 0.0
+                        return (0.60 * q_norm) + (0.30 * progress) + (0.20 * area_norm) - trap_penalty
+
+                    best_safe_move = max(safe_moves, key=move_score)
+                    if best_safe_move != proposed_move_idx:
+                        final_move = [0, 0, 0]
+                        final_move[best_safe_move] = 1
 
         return final_move
 
