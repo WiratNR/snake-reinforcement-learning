@@ -319,7 +319,7 @@ class Agent:
 
         targets = [(self._point_to_cell(game.food), 1)]
         if game.bonus_food is not None and game.bonus_timer > 0:
-            targets.append((self._point_to_cell(game.bonus_food), 5))
+            targets.append((self._point_to_cell(game.bonus_food), 4))
 
         candidates = []
         for target, value in targets:
