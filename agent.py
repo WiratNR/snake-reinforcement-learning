@@ -31,6 +31,9 @@ DEFAULT_POLICY_WEIGHTS = {
     "space": 0.20,
     "tail_access": 0.0,
     "food_path": 0.0,
+    "safe_food_step": 0.0,
+    "tail_chase_step": 0.0,
+    "target_distance": 0.0,
     "wall_margin": 0.0,
     "turn_penalty": 0.0,
 }
@@ -608,6 +611,10 @@ class Agent:
         blocked_base = set(snake[:-1])
         tail = snake[-1]
         target_cell = self._point_to_cell(target)
+        safe_food_path = self._bfs_cells(game, self._point_to_cell(game.head), target_cell, blocked_base)
+        safe_food_next = safe_food_path[1] if safe_food_path and len(safe_food_path) > 1 and self._can_reach_tail_after_path(game, safe_food_path) else None
+        tail_path = self._bfs_cells(game, self._point_to_cell(game.head), tail, blocked_base)
+        tail_next = tail_path[1] if tail_path and len(tail_path) > 1 else None
         weights = self.policy_weights
         candidates = []
         for move_idx, direction in enumerate(next_dirs):
@@ -626,6 +633,9 @@ class Agent:
             food_path_score = 0.0
             if food_path is not None and len(food_path) > 1:
                 food_path_score = 1.0 - min(1.0, (len(food_path) - 1) / max(1, max_dist))
+            safe_food_step = 1.0 if next_cell == safe_food_next else 0.0
+            tail_chase_step = 1.0 if next_cell == tail_next else 0.0
+            target_distance_score = 1.0 - min(1.0, (next_dist / BLOCK_SIZE) / max(1, max_dist))
             wall_margin = min(point.x, game.w - BLOCK_SIZE - point.x, point.y, game.h - BLOCK_SIZE - point.y)
             wall_score = wall_margin / max(BLOCK_SIZE, min(game.w, game.h) / 2)
             turn_penalty = 0.0 if move_idx == 0 else 1.0
@@ -635,6 +645,9 @@ class Agent:
                 + (weights["space"] * area_score)
                 + (weights["tail_access"] * tail_access)
                 + (weights["food_path"] * food_path_score)
+                + (weights["safe_food_step"] * safe_food_step)
+                + (weights["tail_chase_step"] * tail_chase_step)
+                + (weights["target_distance"] * target_distance_score)
                 + (weights["wall_margin"] * wall_score)
                 - (weights["turn_penalty"] * turn_penalty)
             )
@@ -1121,6 +1134,9 @@ def _mutate_policy_weights(base_weights, rng, scale):
         "space": (-0.2, 2.0),
         "tail_access": (-0.5, 2.0),
         "food_path": (-0.5, 2.0),
+        "safe_food_step": (-0.5, 3.0),
+        "tail_chase_step": (-0.5, 2.0),
+        "target_distance": (-0.5, 2.0),
         "wall_margin": (-0.5, 1.5),
         "turn_penalty": (-0.5, 1.0),
     }
@@ -1175,6 +1191,9 @@ def policy_search(
                     "space": (0.0, 1.8),
                     "tail_access": (0.0, 1.8),
                     "food_path": (0.0, 1.8),
+                    "safe_food_step": (0.0, 2.8),
+                    "tail_chase_step": (0.0, 1.8),
+                    "target_distance": (0.0, 1.8),
                     "wall_margin": (-0.2, 1.0),
                     "turn_penalty": (-0.2, 0.8),
                 }.items()
