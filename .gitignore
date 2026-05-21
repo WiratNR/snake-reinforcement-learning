@@ -18,3 +18,4 @@ model/
 stats.txt
 *.log
 self_learning_metrics.json
+policy_search_metrics.json

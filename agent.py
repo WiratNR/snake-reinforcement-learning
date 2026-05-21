@@ -23,6 +23,17 @@ MODEL_FOOD_PROGRESS_BONUS = 0.20
 MODEL_SPACE_BONUS = 0.20
 STALL_FRAME_LIMIT = 300
 SELF_LEARN_METRICS_FILE = 'self_learning_metrics.json'
+POLICY_SEARCH_METRICS_FILE = 'policy_search_metrics.json'
+POLICY_WEIGHTS_FILE = 'model/policy_weights.json'
+DEFAULT_POLICY_WEIGHTS = {
+    "q": 1.0,
+    "food_progress": 0.20,
+    "space": 0.20,
+    "tail_access": 0.0,
+    "food_path": 0.0,
+    "wall_margin": 0.0,
+    "turn_penalty": 0.0,
+}
 
 class LoopMonitor:
     def __init__(self, history_len=100, threshold=4):
@@ -64,6 +75,7 @@ class Agent:
         self.force_cycle_mode = False
         self.use_high_level_planners = True
         self.exploration_epsilon_override = None
+        self.policy_weights = DEFAULT_POLICY_WEIGHTS.copy()
         self._cycle_route_cache = {}
         self._cycle_index_cache = {}
         
@@ -79,6 +91,28 @@ class Agent:
         if self.model.load():
             self.target_model.load_state_dict(self.model.state_dict())
             print("Loaded existing model configuration.")
+        self._load_policy_weights()
+
+    def _load_policy_weights(self):
+        if not os.path.exists(POLICY_WEIGHTS_FILE):
+            return
+        try:
+            with open(POLICY_WEIGHTS_FILE, "r") as f:
+                loaded = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+        self.policy_weights.update({
+            key: float(value)
+            for key, value in loaded.items()
+            if key in self.policy_weights
+        })
+
+    def save_policy_weights(self, file_name=POLICY_WEIGHTS_FILE):
+        folder = os.path.dirname(file_name)
+        if folder and not os.path.exists(folder):
+            os.makedirs(folder)
+        with open(file_name, "w") as f:
+            json.dump(self.policy_weights, f, indent=2, sort_keys=True)
 
 
     def get_state(self, game):
@@ -569,8 +603,12 @@ class Agent:
 
         target = self._model_target_food(game)
         current_dist = abs(game.head.x - target.x) + abs(game.head.y - target.y)
+        max_dist = (game.w + game.h) / BLOCK_SIZE
         snake = [self._point_to_cell(point) for point in game.snake]
         blocked_base = set(snake[:-1])
+        tail = snake[-1]
+        target_cell = self._point_to_cell(target)
+        weights = self.policy_weights
         candidates = []
         for move_idx, direction in enumerate(next_dirs):
             point = self._next_point_for_direction(game.head, direction)
@@ -582,10 +620,23 @@ class Agent:
             next_cell = self._point_to_cell(point)
             area = self._reachable_cells_from(game, next_cell, blocked_base | self._obstacle_cells(game))
             area_score = min(1.0, area / max(1, len(game.snake) * 2))
+            tail_path = self._bfs_cells(game, next_cell, tail, blocked_base)
+            tail_access = 1.0 if tail_path is not None else -1.0
+            food_path = self._bfs_cells(game, next_cell, target_cell, blocked_base)
+            food_path_score = 0.0
+            if food_path is not None and len(food_path) > 1:
+                food_path_score = 1.0 - min(1.0, (len(food_path) - 1) / max(1, max_dist))
+            wall_margin = min(point.x, game.w - BLOCK_SIZE - point.x, point.y, game.h - BLOCK_SIZE - point.y)
+            wall_score = wall_margin / max(BLOCK_SIZE, min(game.w, game.h) / 2)
+            turn_penalty = 0.0 if move_idx == 0 else 1.0
             score = (
-                q_values[move_idx].item()
-                + (MODEL_FOOD_PROGRESS_BONUS * progress)
-                + (MODEL_SPACE_BONUS * area_score)
+                (weights["q"] * q_values[move_idx].item())
+                + (weights["food_progress"] * progress)
+                + (weights["space"] * area_score)
+                + (weights["tail_access"] * tail_access)
+                + (weights["food_path"] * food_path_score)
+                + (weights["wall_margin"] * wall_score)
+                - (weights["turn_penalty"] * turn_penalty)
             )
             candidates.append((score, move_idx))
 
@@ -823,7 +874,7 @@ class Agent:
         return final_move
 
 
-def evaluate_model_only(games=25, level='random', width=640, height=480, seed=20260521, agent=None):
+def evaluate_model_only(games=25, level='random', width=640, height=480, seed=20260521, agent=None, policy_weights=None):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -836,11 +887,14 @@ def evaluate_model_only(games=25, level='random', width=640, height=480, seed=20
     previous_planner_setting = agent.use_high_level_planners
     previous_training = agent.model.training
     previous_epsilon_override = agent.exploration_epsilon_override
+    previous_policy_weights = agent.policy_weights.copy()
 
     agent.n_games = 1000
     agent.force_cycle_mode = False
     agent.use_high_level_planners = False
     agent.exploration_epsilon_override = 0.0
+    if policy_weights is not None:
+        agent.policy_weights.update(policy_weights)
     agent.model.eval()
 
     game = SnakeGameAI(w=width, h=height, render=False)
@@ -884,6 +938,7 @@ def evaluate_model_only(games=25, level='random', width=640, height=480, seed=20
     agent.force_cycle_mode = previous_force_cycle
     agent.use_high_level_planners = previous_planner_setting
     agent.exploration_epsilon_override = previous_epsilon_override
+    agent.policy_weights = previous_policy_weights
     if previous_training:
         agent.model.train()
     else:
@@ -1056,6 +1111,132 @@ def self_learn(
             agent.model.train()
 
     return {"best_mean": best_mean, "best_max": best_max}
+
+
+def _mutate_policy_weights(base_weights, rng, scale):
+    candidate = {}
+    limits = {
+        "q": (0.0, 2.0),
+        "food_progress": (-0.5, 1.5),
+        "space": (-0.2, 2.0),
+        "tail_access": (-0.5, 2.0),
+        "food_path": (-0.5, 2.0),
+        "wall_margin": (-0.5, 1.5),
+        "turn_penalty": (-0.5, 1.0),
+    }
+    for key, value in base_weights.items():
+        low, high = limits[key]
+        candidate[key] = float(np.clip(value + rng.normal(0, scale), low, high))
+    return candidate
+
+
+def policy_search(
+    iterations=80,
+    eval_games=8,
+    validate_games=25,
+    level='random',
+    width=640,
+    height=480,
+    seed=20260521,
+    min_improvement=1.0,
+):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    rng = np.random.default_rng(seed)
+
+    agent = Agent()
+    agent.use_high_level_planners = False
+    agent.force_cycle_mode = False
+    agent.model.eval()
+
+    best_weights = agent.policy_weights.copy()
+    best_result = evaluate_model_only(
+        games=validate_games,
+        level=level,
+        width=width,
+        height=height,
+        seed=seed,
+        agent=agent,
+        policy_weights=best_weights,
+    )
+    best_mean = best_result["model_only_mean_score"]
+    best_max = best_result["model_only_max_score"]
+    print(json.dumps({"event": "policy_initial", "weights": best_weights, **best_result}, ensure_ascii=False), flush=True)
+
+    for iteration in range(1, iterations + 1):
+        scale = max(0.03, 0.35 * (1.0 - (iteration - 1) / max(1, iterations)))
+        if iteration % 10 == 0:
+            candidate_weights = {
+                key: float(rng.uniform(*bounds))
+                for key, bounds in {
+                    "q": (0.0, 2.0),
+                    "food_progress": (-0.2, 1.2),
+                    "space": (0.0, 1.8),
+                    "tail_access": (0.0, 1.8),
+                    "food_path": (0.0, 1.8),
+                    "wall_margin": (-0.2, 1.0),
+                    "turn_penalty": (-0.2, 0.8),
+                }.items()
+            }
+        else:
+            candidate_weights = _mutate_policy_weights(best_weights, rng, scale)
+
+        quick_result = evaluate_model_only(
+            games=eval_games,
+            level=level,
+            width=width,
+            height=height,
+            seed=seed + iteration * 101,
+            agent=agent,
+            policy_weights=candidate_weights,
+        )
+        validate_result = None
+        accepted = False
+        if (
+            quick_result["model_only_mean_score"] >= best_mean - 5
+            or quick_result["model_only_max_score"] > best_max
+        ):
+            validate_result = evaluate_model_only(
+                games=validate_games,
+                level=level,
+                width=width,
+                height=height,
+                seed=seed,
+                agent=agent,
+                policy_weights=candidate_weights,
+            )
+            accepted = (
+                validate_result["model_only_mean_score"] >= best_mean + min_improvement
+                or (
+                    validate_result["model_only_mean_score"] >= best_mean
+                    and validate_result["model_only_max_score"] > best_max
+                )
+            )
+            if accepted:
+                best_weights = candidate_weights
+                best_mean = validate_result["model_only_mean_score"]
+                best_max = validate_result["model_only_max_score"]
+                agent.policy_weights = best_weights.copy()
+                agent.save_policy_weights()
+
+        report = {
+            "event": "policy_search",
+            "iteration": iteration,
+            "accepted": accepted,
+            "best_mean": best_mean,
+            "best_max": best_max,
+            "quick_mean": quick_result["model_only_mean_score"],
+            "quick_max": quick_result["model_only_max_score"],
+            "validate_mean": validate_result["model_only_mean_score"] if validate_result else None,
+            "validate_max": validate_result["model_only_max_score"] if validate_result else None,
+            "weights": candidate_weights,
+        }
+        with open(POLICY_SEARCH_METRICS_FILE, "a") as f:
+            f.write(json.dumps(report, ensure_ascii=False) + "\n")
+        print(json.dumps(report, ensure_ascii=False), flush=True)
+
+    return {"best_mean": best_mean, "best_max": best_max, "weights": best_weights}
 
 
 def train(target_level=None):
@@ -1309,6 +1490,28 @@ if __name__ == '__main__':
             restore_patience=args.restore_patience,
             min_exploration=args.min_exploration,
             exploration_decay=args.exploration_decay,
+        ), ensure_ascii=False))
+
+    elif len(sys.argv) > 1 and sys.argv[1] == 'policysearch':
+        parser = argparse.ArgumentParser(description='Self-search model move policy weights with high-level planners disabled.')
+        parser.add_argument('--iterations', type=int, default=80)
+        parser.add_argument('--eval-games', type=int, default=8)
+        parser.add_argument('--validate-games', type=int, default=25)
+        parser.add_argument('--level', default='random', choices=LevelManager.LEVELS)
+        parser.add_argument('--width', type=int, default=640)
+        parser.add_argument('--height', type=int, default=480)
+        parser.add_argument('--seed', type=int, default=20260521)
+        parser.add_argument('--min-improvement', type=float, default=1.0)
+        args = parser.parse_args(sys.argv[2:])
+        print(json.dumps(policy_search(
+            iterations=args.iterations,
+            eval_games=args.eval_games,
+            validate_games=args.validate_games,
+            level=args.level,
+            width=args.width,
+            height=args.height,
+            seed=args.seed,
+            min_improvement=args.min_improvement,
         ), ensure_ascii=False))
     
     # Check for parallel training mode
