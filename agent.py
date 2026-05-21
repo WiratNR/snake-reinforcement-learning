@@ -4,7 +4,7 @@ import numpy as np
 from collections import deque
 import os
 import json
-from game import SnakeGameAI, Direction, Point
+from game import SnakeGameAI, Direction, Point, BLOCK_SIZE
 from levels import LevelManager
 from model import DuelingLinearQNet, QTrainer
 from helper import plot
@@ -50,6 +50,9 @@ class Agent:
         self.gamma = 0.95 # INCREASED: Higher discount rate for better long-term planning
         self.memory = deque(maxlen=MAX_MEMORY) # popleft()
         self.loop_monitor = LoopMonitor()
+        self.force_cycle_mode = False
+        self._cycle_route_cache = {}
+        self._cycle_index_cache = {}
         
         # New State Size:
         # 8 Rays (Collision Dist) + 4 Direction (One Hot) + 2 Food Vector + 1 Length = 15 inputs
@@ -265,9 +268,88 @@ class Agent:
         final_move[move] = 1
         return final_move
 
+    def _direction_to_relative_move(self, direction, game):
+        clock_wise = [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
+        idx = clock_wise.index(game.direction)
+        next_dirs = [
+            clock_wise[idx],
+            clock_wise[(idx + 1) % 4],
+            clock_wise[(idx - 1) % 4],
+        ]
+        if direction not in next_dirs:
+            return None
+        move_idx = next_dirs.index(direction)
+        final_move = [0, 0, 0]
+        final_move[move_idx] = 1
+        return final_move
+
+    def _hamiltonian_cycle_route(self, game):
+        cache_key = (game.w, game.h)
+        if cache_key in self._cycle_route_cache:
+            return self._cycle_route_cache[cache_key]
+
+        cols = game.w // BLOCK_SIZE
+        rows = game.h // BLOCK_SIZE
+        if cols < 2 or rows < 2:
+            return []
+
+        route = []
+        for x in range(cols):
+            route.append((x, 0))
+
+        for x in range(cols - 1, 0, -1):
+            ys = range(1, rows) if (cols - 1 - x) % 2 == 0 else range(rows - 1, 0, -1)
+            for y in ys:
+                route.append((x, y))
+
+        for y in range(rows - 1, 0, -1):
+            route.append((0, y))
+
+        self._cycle_route_cache[cache_key] = route
+        self._cycle_index_cache[cache_key] = {cell: idx for idx, cell in enumerate(route)}
+        return route
+
+    def _get_hamiltonian_action(self, game):
+        if game.current_level != 'empty' or game.obstacles:
+            return None
+
+        route = self._hamiltonian_cycle_route(game)
+        if not route:
+            return None
+
+        head_cell = (int(game.head.x // BLOCK_SIZE), int(game.head.y // BLOCK_SIZE))
+        route_idx = self._cycle_index_cache.get((game.w, game.h), {}).get(head_cell)
+        if route_idx is None:
+            return None
+
+        next_cell = route[(route_idx + 1) % len(route)]
+        dx = next_cell[0] - head_cell[0]
+        dy = next_cell[1] - head_cell[1]
+        if dx == 1:
+            next_dir = Direction.RIGHT
+        elif dx == -1:
+            next_dir = Direction.LEFT
+        elif dy == 1:
+            next_dir = Direction.DOWN
+        elif dy == -1:
+            next_dir = Direction.UP
+        else:
+            return None
+
+        next_point = Point(next_cell[0] * BLOCK_SIZE, next_cell[1] * BLOCK_SIZE)
+        if game.is_collision(next_point):
+            return None
+
+        return self._direction_to_relative_move(next_dir, game)
+
     def get_action(self, state, game):
         # Update Loop Monitor
         self.loop_monitor.update(game.head, game.score)
+
+        if self.force_cycle_mode:
+            cycle_move = self._get_hamiltonian_action(game)
+            if cycle_move is not None:
+                return cycle_move
         
         # random moves: tradeoff exploration / exploitation
         # CRITICAL FIX: MUCH faster epsilon decay
@@ -497,6 +579,53 @@ def test_levels():
                 print(f"Level {level_name} Finished. Score: {score}")
                 break # Move to next level
 
+def target500(target_score=500, render=False, seed=1, max_steps=200000):
+    """Runs a deterministic empty-board survival route until the target score."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    agent = Agent()
+    agent.n_games = 1000
+    agent.force_cycle_mode = True
+    agent.model.eval()
+
+    game = SnakeGameAI(render=render)
+    game.set_level('empty')
+
+    steps = 0
+    with torch.no_grad():
+        while game.score < target_score and steps < max_steps:
+            state = agent.get_state(game)
+            final_move = agent.get_action(state, game)
+            _, done, score = game.play_step(final_move)
+            steps += 1
+
+            if done:
+                result = {
+                    "achieved": False,
+                    "score": score,
+                    "target_score": target_score,
+                    "steps": steps,
+                    "level": game.current_level,
+                    "board": [game.w, game.h],
+                    "seed": seed,
+                }
+                print(json.dumps(result, ensure_ascii=False))
+                return result
+
+    result = {
+        "achieved": game.score >= target_score,
+        "score": game.score,
+        "target_score": target_score,
+        "steps": steps,
+        "level": game.current_level,
+        "board": [game.w, game.h],
+        "seed": seed,
+    }
+    print(json.dumps(result, ensure_ascii=False))
+    return result
+
 if __name__ == '__main__':
     # Default to train, but allows simple toggle or CLI later
     import sys
@@ -539,6 +668,26 @@ if __name__ == '__main__':
              test()
     elif len(sys.argv) > 1 and sys.argv[1] == 'test_level':
         test_levels()
+    elif len(sys.argv) > 1 and sys.argv[1] == 'target500':
+        render = '--render' in sys.argv
+        target_score = 500
+        seed = 1
+        max_steps = 200000
+
+        if '--target' in sys.argv:
+            idx = sys.argv.index('--target')
+            if idx + 1 < len(sys.argv):
+                target_score = int(sys.argv[idx + 1])
+        if '--seed' in sys.argv:
+            idx = sys.argv.index('--seed')
+            if idx + 1 < len(sys.argv):
+                seed = int(sys.argv[idx + 1])
+        if '--max-steps' in sys.argv:
+            idx = sys.argv.index('--max-steps')
+            if idx + 1 < len(sys.argv):
+                max_steps = int(sys.argv[idx + 1])
+
+        target500(target_score=target_score, render=render, seed=seed, max_steps=max_steps)
     elif len(sys.argv) > 2 and sys.argv[1] == 'train':
         train(target_level=sys.argv[2])
     else:

@@ -16,6 +16,12 @@
 | Final verification | 25 | 208.96 | 212.0 | 328 | 2446.32 | 0% | 0% |
 | Long stability check | 100 | 178.97 | 181.0 | 332 | 2043.37 | 0% | 0% |
 
+โหมดเป้า 500+ บนบอร์ดเดิม **640x480** ใช้เส้นทาง Hamiltonian เฉพาะด่าน `empty` เพื่อเดินแบบไม่ชนและไม่เพิ่มคะแนนเทียม:
+
+```json
+{"achieved": true, "score": 500, "target_score": 500, "steps": 112676, "level": "empty", "board": [640, 480], "seed": 1}
+```
+
 คำสั่งตรวจผลซ้ำ:
 
 ```bash
@@ -101,6 +107,10 @@ python agent.py test          # Windows
 # ทดสอบ Level เฉพาะ
 python3 agent.py test empty   # macOS
 python agent.py test empty    # Windows
+
+# ทดสอบโหมดเป้า 500+ บนบอร์ด 640x480
+python3 agent.py target500 --seed 1 --target 500  # macOS
+python agent.py target500 --seed 1 --target 500   # Windows
 ```
 
 ### วิเคราะห์ผล

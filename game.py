@@ -167,8 +167,9 @@ class SnakeGameAI:
         reward = 0
         game_over = False
         
-        # Increased frame limit to 100*len (standard) or keep 150
-        if self.is_collision() or self.frame_iteration > 100*len(self.snake):
+        grid_cells = (self.w // BLOCK_SIZE) * (self.h // BLOCK_SIZE)
+        frame_limit = max(100 * len(self.snake), grid_cells)
+        if self.is_collision() or self.frame_iteration > frame_limit:
             game_over = True
             reward = -10  # REDUCED: Less harsh death penalty
             return reward, game_over, self.score
@@ -184,11 +185,13 @@ class SnakeGameAI:
         if self.head == self.food:
             self.score += 1
             reward = 10  # Eat Food reward
+            self.frame_iteration = 0
             self._place_food()
         # Bonus Food
         elif self.bonus_food is not None and self.head == self.bonus_food:
             self.score += 5
             reward = 20  # INCREASED: Better bonus reward
+            self.frame_iteration = 0
             self.bonus_food = None
         else:
             self.snake.pop()
