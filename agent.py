@@ -273,31 +273,6 @@ class Agent:
                     best_safe_move = max(safe_moves, key=lambda m: q_values[m].item())
                     final_move = [0, 0, 0]
                     final_move[best_safe_move] = 1
-            elif self.n_games > 200:
-                proposed_area = self._get_reachable_area(game, cx, cy)
-                min_open_area = len(game.snake)
-                if proposed_area < min_open_area:
-                    safe_moves = []
-                    for i in range(3):
-                        check_dir = next_dirs[i]
-                        test_x, test_y = game.head.x, game.head.y
-                        if check_dir == Direction.RIGHT: test_x += 20
-                        elif check_dir == Direction.LEFT: test_x -= 20
-                        elif check_dir == Direction.DOWN: test_y += 20
-                        elif check_dir == Direction.UP: test_y -= 20
-                        if (
-                            not game.is_collision(Point(test_x, test_y))
-                            and self._get_reachable_area(game, test_x, test_y) >= min_open_area
-                        ):
-                            safe_moves.append(i)
-
-                    if safe_moves:
-                        state0 = torch.tensor(np.array(state), dtype=torch.float).unsqueeze(0)
-                        with torch.no_grad():
-                            q_values = self.model(state0)[0]
-                        best_safe_move = max(safe_moves, key=lambda m: q_values[m].item())
-                        final_move = [0, 0, 0]
-                        final_move[best_safe_move] = 1
 
         return final_move
 
