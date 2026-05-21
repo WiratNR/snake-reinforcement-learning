@@ -13,8 +13,8 @@
 | ชุดทดสอบ | เกม | Mean score | Median | Max | Mean steps | Zero score | Short game |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Baseline ก่อนปรับ | 25 | 36.44 | 40.0 | 84 | 624.32 | 20% | 20% |
-| Final verification | 25 | 207.92 | 212.0 | 328 | 2430.64 | 0% | 0% |
-| Long stability check | 100 | 178.29 | 179.5 | 336 | 2038.74 | 0% | 0% |
+| Final verification | 25 | 208.96 | 212.0 | 328 | 2446.32 | 0% | 0% |
+| Long stability check | 100 | 178.97 | 181.0 | 332 | 2043.37 | 0% | 0% |
 
 คำสั่งตรวจผลซ้ำ:
 
