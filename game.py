@@ -91,8 +91,8 @@ class SnakeGameAI:
             self._place_food()
             return
 
-        # 2. Try to place Bonus Food (30% chance if not exists)
-        if self.bonus_food is None and random.random() < 0.3:
+        # 2. Try to place Bonus Food (40% chance if not exists)
+        if self.bonus_food is None and random.random() < 0.4:
             self._place_bonus_food()
             
     def _place_bonus_food(self):
