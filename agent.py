@@ -12,7 +12,8 @@ from helper import plot
 MAX_MEMORY = 100_000
 BATCH_SIZE = 4000  # INCREASED: Larger batch for more stable gradients
 LR = 0.0001  # REDUCED: Lower learning rate for better convergence and lower loss
-MODEL_FOOD_PROGRESS_BONUS = 0.12
+MODEL_FOOD_PROGRESS_BONUS = 0.20
+MODEL_SPACE_BONUS = 0.20
 STALL_FRAME_LIMIT = 300
 
 class LoopMonitor:
@@ -558,6 +559,8 @@ class Agent:
 
         target = self._model_target_food(game)
         current_dist = abs(game.head.x - target.x) + abs(game.head.y - target.y)
+        snake = [self._point_to_cell(point) for point in game.snake]
+        blocked_base = set(snake[:-1])
         candidates = []
         for move_idx, direction in enumerate(next_dirs):
             point = self._next_point_for_direction(game.head, direction)
@@ -566,7 +569,14 @@ class Agent:
 
             next_dist = abs(point.x - target.x) + abs(point.y - target.y)
             progress = (current_dist - next_dist) / BLOCK_SIZE
-            score = q_values[move_idx].item() + (MODEL_FOOD_PROGRESS_BONUS * progress)
+            next_cell = self._point_to_cell(point)
+            area = self._reachable_cells_from(game, next_cell, blocked_base | self._obstacle_cells(game))
+            area_score = min(1.0, area / max(1, len(game.snake) * 2))
+            score = (
+                q_values[move_idx].item()
+                + (MODEL_FOOD_PROGRESS_BONUS * progress)
+                + (MODEL_SPACE_BONUS * area_score)
+            )
             candidates.append((score, move_idx))
 
         if not candidates:
@@ -912,6 +922,7 @@ def train(target_level=None):
 def test(target_level=None):
     """Runs the game with UI using the current best model (Greedy/Low Epsilon)"""
     agent = Agent()
+    agent.model.eval()
     game = SnakeGameAI(render=True)
     
     if target_level:
@@ -933,6 +944,7 @@ def test(target_level=None):
 def test_levels():
     """Runs one game for each level type to verify performance"""
     agent = Agent()
+    agent.model.eval()
     game = SnakeGameAI(render=True)
     agent.n_games = 1000 # Force low epsilon
     
