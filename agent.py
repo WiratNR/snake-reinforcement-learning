@@ -220,20 +220,41 @@ class Agent:
             if bonus_dist <= normal_dist:
                 target = game.bonus_food
 
-        candidates = []
-        for move_idx, direction in enumerate(next_dirs):
-            test_x, test_y = game.head.x, game.head.y
+        def next_point(point, direction):
+            test_x, test_y = point.x, point.y
             if direction == Direction.RIGHT: test_x += 20
             elif direction == Direction.LEFT: test_x -= 20
             elif direction == Direction.DOWN: test_y += 20
             elif direction == Direction.UP: test_y -= 20
+            return Point(test_x, test_y)
 
-            point = Point(test_x, test_y)
+        queue = deque([(game.head, [])])
+        visited = {game.head}
+        while queue:
+            point, path = queue.popleft()
+            if point == target and path:
+                for move_idx, direction in enumerate(next_dirs):
+                    if direction == path[0]:
+                        final_move = [0, 0, 0]
+                        final_move[move_idx] = 1
+                        return final_move
+                break
+
+            for direction in clock_wise:
+                point_next = next_point(point, direction)
+                if point_next in visited or game.is_collision(point_next):
+                    continue
+                visited.add(point_next)
+                queue.append((point_next, path + [direction]))
+
+        candidates = []
+        for move_idx, direction in enumerate(next_dirs):
+            point = next_point(game.head, direction)
             if game.is_collision(point):
                 continue
 
-            target_dist = abs(test_x - target.x) + abs(test_y - target.y)
-            wall_margin = min(test_x, game.w - 20 - test_x, test_y, game.h - 20 - test_y)
+            target_dist = abs(point.x - target.x) + abs(point.y - target.y)
+            wall_margin = min(point.x, game.w - 20 - point.x, point.y, game.h - 20 - point.y)
             candidates.append((target_dist, -wall_margin, move_idx))
 
         if not candidates:
