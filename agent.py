@@ -264,24 +264,13 @@ class Agent:
                 
                 # Override only if there are safe alternatives
                 if safe_moves:
-                    # Pick the safe move with the most room to continue.
+                    # Pick safe move with highest Q-value
                     state0 = torch.tensor(np.array(state), dtype=torch.float).unsqueeze(0)
                     with torch.no_grad():
                         q_values = self.model(state0)[0]
                     
-                    def safe_move_score(move_idx):
-                        check_dir = next_dirs[move_idx]
-                        test_x, test_y = game.head.x, game.head.y
-                        if check_dir == Direction.RIGHT: test_x += 20
-                        elif check_dir == Direction.LEFT: test_x -= 20
-                        elif check_dir == Direction.DOWN: test_y += 20
-                        elif check_dir == Direction.UP: test_y -= 20
-                        area = self._get_reachable_area(game, test_x, test_y)
-                        return (area, q_values[move_idx].item())
-
-                    # Choose the safe move with the largest escape area, then
-                    # defer to Q-values when the candidates are similarly open.
-                    best_safe_move = max(safe_moves, key=safe_move_score)
+                    # Choose best safe move
+                    best_safe_move = max(safe_moves, key=lambda m: q_values[m].item())
                     final_move = [0, 0, 0]
                     final_move[best_safe_move] = 1
 
