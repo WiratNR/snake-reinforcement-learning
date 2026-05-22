@@ -1182,7 +1182,9 @@ def policy_search(
     print(json.dumps({"event": "policy_initial", "weights": best_weights, **best_result}, ensure_ascii=False), flush=True)
 
     for iteration in range(1, iterations + 1):
-        if best_mean >= 250:
+        if best_mean >= 290:
+            starting_scale = 0.055
+        elif best_mean >= 250:
             starting_scale = 0.12
         elif best_mean >= 180:
             starting_scale = 0.20
