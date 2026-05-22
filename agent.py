@@ -97,10 +97,11 @@ class Agent:
         self._load_policy_weights()
 
     def _load_policy_weights(self):
-        if not os.path.exists(POLICY_WEIGHTS_FILE):
+        policy_file = os.environ.get("SNAKE_POLICY_WEIGHTS", POLICY_WEIGHTS_FILE)
+        if not os.path.exists(policy_file):
             return
         try:
-            with open(POLICY_WEIGHTS_FILE, "r") as f:
+            with open(policy_file, "r") as f:
                 loaded = json.load(f)
         except (OSError, json.JSONDecodeError):
             return
